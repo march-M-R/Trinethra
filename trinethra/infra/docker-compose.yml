@@ -1,0 +1,22 @@
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: trinethra-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: trinethra
+      POSTGRES_USER: trinethra_user
+      POSTGRES_PASSWORD: trinethra_pass
+    ports:
+      - "5432:5432"
+    volumes:
+      - trinethra_db_data:/var/lib/postgresql/data
+      - ./sql:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trinethra_user -d trinethra"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  trinethra_db_data:

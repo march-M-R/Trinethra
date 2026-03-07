@@ -1,0 +1,12 @@
+.env
+.venv/
+__pycache__/
+node_modules/
+.next/
+dist/
+build/
+*.pyc
+ui/.env.local
+ui/node_modules/
+ui/.next/
+trinethra/.venv/
