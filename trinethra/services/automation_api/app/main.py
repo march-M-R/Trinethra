@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List
 
 import psycopg2
 import psycopg2.extras
 import requests
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -53,6 +53,7 @@ DEFAULT_POLICY = {
 
 APPROVE_CUTOFF = DEFAULT_POLICY[CAUTION_MODE]["approve_cutoff"]
 BLOCK_CUTOFF = DEFAULT_POLICY[CAUTION_MODE]["block_cutoff"]
+
 
 # ----------------------------
 # Schemas
@@ -206,6 +207,41 @@ def health():
         "service": "automation_api",
         "mode": CAUTION_MODE,
         "policy_version": POLICY_VERSION,
+    }
+
+
+# ----------------------------
+# Get decisions endpoint
+# ----------------------------
+@app.get("/decisions")
+def get_decisions(limit: int = Query(50, ge=1, le=200)):
+
+    sql = """
+    SELECT
+        decision_id,
+        action,
+        confidence,
+        risk_signal,
+        caution_mode,
+        model_version,
+        timestamp
+    FROM decision_events
+    ORDER BY timestamp DESC
+    LIMIT %s
+    """
+
+    try:
+        with _db_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, (limit,))
+                rows = cur.fetchall()
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"DB read failed: {e}")
+
+    return {
+        "count": len(rows),
+        "decisions": rows
     }
 
 
