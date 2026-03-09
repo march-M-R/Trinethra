@@ -7,6 +7,19 @@ export type DecisioningEvent = {
   payload: Record<string, any>;
 };
 
+export type DecisionRow = {
+  decision_id?: string;
+  event_id?: string;
+  claim_id?: string;
+  action?: string;
+  outcome?: string;
+  decision?: string;
+  score?: number;
+  policy_version?: string;
+  created_at?: string;
+  [key: string]: unknown;
+};
+
 const AUTOMATION_BASE =
   process.env.NEXT_PUBLIC_AUTOMATION_API_BASE ?? "http://localhost:8003";
 
@@ -26,7 +39,6 @@ async function http<T>(url: string, init?: RequestInit): Promise<T> {
     cache: "no-store",
   });
 
-  // Try to parse body even on errors (FastAPI returns JSON detail)
   const text = await res.text();
   const data = text ? safeJsonParse(text) : null;
 
@@ -37,7 +49,6 @@ async function http<T>(url: string, init?: RequestInit): Promise<T> {
     throw new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
   }
 
-  // If endpoint returns empty body, return empty object
   return (data as T) ?? ({} as T);
 }
 
@@ -50,7 +61,7 @@ function safeJsonParse(s: string) {
 }
 
 /**
- * ✅ Automation API: POST /process_claim
+ * Automation API: POST /process_claim
  */
 export async function processClaim(event: DecisioningEvent) {
   return http<any>(`${AUTOMATION_BASE}/process_claim`, {
@@ -60,26 +71,27 @@ export async function processClaim(event: DecisioningEvent) {
 }
 
 /**
- * ✅ Automation API: GET /decisions?limit=...
- * Your backend returns: { items: [...] }
- * UI expects an array → normalize here.
+ * Automation API: GET /decisions?limit=...
+ * Backend may return an array directly or { items: [...] }.
  */
-export async function getDecisions(limit = 50) {
+export async function getDecisions(limit = 50): Promise<DecisionRow[]> {
   const data = await http<any>(`${AUTOMATION_BASE}/decisions?limit=${limit}`);
-  if (Array.isArray(data)) return data;
-  if (Array.isArray(data?.items)) return data.items;
+  if (Array.isArray(data)) return data as DecisionRow[];
+  if (Array.isArray(data?.items)) return data.items as DecisionRow[];
   return [];
 }
 
 /**
- * ✅ Automation API: GET /decisions/{id}
+ * Automation API: GET /decisions/{id}
  */
-export async function getDecisionById(id: string) {
-  return http<any>(`${AUTOMATION_BASE}/decisions/${encodeURIComponent(id)}`);
+export async function getDecisionById(id: string): Promise<DecisionRow> {
+  return http<DecisionRow>(
+    `${AUTOMATION_BASE}/decisions/${encodeURIComponent(id)}`
+  );
 }
 
 /**
- * ✅ Monitoring API: GET /kpis/summary?window_hours=...
+ * Monitoring API: GET /kpis/summary?window_hours=...
  */
 export async function getKpiSummary(windowHours = 24) {
   return http<any>(
@@ -88,7 +100,7 @@ export async function getKpiSummary(windowHours = 24) {
 }
 
 /**
- * ✅ Explain service: POST /explain/{claim_id}
+ * Explain service: POST /explain/{claim_id}
  */
 export async function getExplanation(
   claimId: string,
@@ -100,14 +112,14 @@ export async function getExplanation(
     body: JSON.stringify({ payload, decision }),
   });
 }
+
+/**
+ * Analyst endpoint
+ * Kept environment-based for production safety.
+ */
 export async function askAnalyst(question: string) {
-  const res = await fetch("http://localhost:8001/analyst", {
+  return http<any>(`${EXPLAIN_BASE}/analyst`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
     body: JSON.stringify({ question }),
   });
-
-  return res.json();
 }
