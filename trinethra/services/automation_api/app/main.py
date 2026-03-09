@@ -33,7 +33,7 @@ POLICY_VERSION = os.getenv("POLICY_VERSION", "policy_v2")
 
 MODEL_URL = os.getenv(
     "MODEL_URL",
-    "https://trinethra-model-service.onrender.com",
+    "https://trinethra-model-service.onrender.com"
 )
 
 DB_HOST = os.getenv("DB_HOST")
@@ -108,7 +108,10 @@ def _insert_event(domain, event_type, entity_id, payload):
 
     with _db_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(sql, (domain, event_type, entity_id, psycopg2.extras.Json(payload)))
+            cur.execute(
+                sql,
+                (domain, event_type, entity_id, psycopg2.extras.Json(payload)),
+            )
             return cur.fetchone()["event_id"]
 
 
@@ -152,14 +155,14 @@ def _insert_decision(
 # ----------------------------
 # Call model service
 # ----------------------------
-def _call_model(entity_id: str):
+def _call_model(payload: Dict[str, Any]):
 
-    url = f"{MODEL_URL}/explain/{entity_id}"
+    url = f"{MODEL_URL}/predict"
 
     start = time.time()
 
     try:
-        r = requests.post(url, json={}, timeout=10)
+        r = requests.post(url, json={"payload": payload}, timeout=10)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"model-service call failed: {e}")
 
@@ -170,15 +173,10 @@ def _call_model(entity_id: str):
 
     data = r.json()
 
-    # convert explain output → risk score
-    risk_signal = float(
-        data.get("kpis_considered", {}).get("avg_risk_signal", 0.5)
-    )
-
     return {
-        "risk_signal": risk_signal,
-        "threshold": APPROVE_CUTOFF,
-        "model_version": "explain_service_v1",
+        "risk_signal": float(data["risk_signal"]),
+        "threshold": float(data["threshold"]),
+        "model_version": data["model_version"],
         "latency_ms": latency,
     }
 
@@ -221,7 +219,7 @@ def process_claim(req: ProcessClaimRequest):
 
     event_id = _insert_event(req.domain, req.event_type, req.entity_id, req.payload)
 
-    model = _call_model(req.entity_id)
+    model = _call_model(req.payload)
 
     risk = model["risk_signal"]
     threshold = model["threshold"]
