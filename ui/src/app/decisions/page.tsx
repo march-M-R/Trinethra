@@ -2,18 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { getDecisions } from "@/lib/api";
-
-type DecisionRow = {
-  decision_id: string;
-  event_id?: string;
-  action: string;
-  confidence: number;
-  caution_mode: string;
-  risk_signal: number;
-  threshold: number;
-  model_version: string;
-};
+import { getDecisions, type DecisionRow } from "@/lib/api";
 
 export default function DecisionsPage() {
   const [rows, setRows] = useState<DecisionRow[]>([]);
@@ -54,8 +43,9 @@ export default function DecisionsPage() {
     return rows.filter((d) => {
       const id = (d.decision_id || "").toLowerCase();
       const action = (d.action || "").toLowerCase();
-      const mode = (d.caution_mode || "").toLowerCase();
-      const ver = (d.model_version || "").toLowerCase();
+      const mode = (String(d.caution_mode ?? "")).toLowerCase();
+      const ver = (String(d.model_version ?? d.policy_version ?? "")).toLowerCase();
+
       return (
         id.includes(query) ||
         action.includes(query) ||
@@ -126,22 +116,30 @@ export default function DecisionsPage() {
               </thead>
 
               <tbody>
-                {filtered.map((d) => (
-                  <tr key={d.decision_id} className="border-t">
+                {filtered.map((d, idx) => (
+                  <tr key={d.decision_id ?? d.event_id ?? String(idx)} className="border-t">
                     <td className="p-3 font-mono">
-                      <Link className="underline" href={`/decisions/${d.decision_id}`}>
-                        {d.decision_id.slice(0, 12)}
-                      </Link>
+                      {d.decision_id ? (
+                        <Link className="underline" href={`/decisions/${d.decision_id}`}>
+                          {d.decision_id.slice(0, 12)}
+                        </Link>
+                      ) : (
+                        <span>-</span>
+                      )}
                     </td>
 
                     <td className="p-3">
                       <OutcomeBadge action={d.action} />
                     </td>
 
-                    <td className="p-3">{Number(d.risk_signal).toFixed(3)}</td>
-                    <td className="p-3">{Number(d.confidence).toFixed(2)}</td>
-                    <td className="p-3">{d.caution_mode}</td>
-                    <td className="p-3">{d.model_version}</td>
+                    <td className="p-3">
+                      {d.risk_signal != null ? Number(d.risk_signal).toFixed(3) : "-"}
+                    </td>
+                    <td className="p-3">
+                      {d.confidence != null ? Number(d.confidence).toFixed(2) : "-"}
+                    </td>
+                    <td className="p-3">{String(d.caution_mode ?? "-")}</td>
+                    <td className="p-3">{String(d.model_version ?? d.policy_version ?? "-")}</td>
                   </tr>
                 ))}
 
@@ -161,7 +159,7 @@ export default function DecisionsPage() {
   );
 }
 
-function OutcomeBadge({ action }: { action: string }) {
+function OutcomeBadge({ action }: { action?: string }) {
   const a = (action || "").toUpperCase();
   const cls =
     a.includes("BLOCK")
