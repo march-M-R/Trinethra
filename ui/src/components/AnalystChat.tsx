@@ -6,9 +6,9 @@ import { askAnalyst } from "@/lib/api";
 type Msg = { role: "user" | "assistant"; text: string };
 
 export default function AnalystChat({
-  entityId,
-  payload,
-  decision,
+  entityId: _entityId,
+  payload: _payload,
+  decision: _decision,
 }: {
   entityId: string;
   payload: any;
@@ -37,13 +37,16 @@ export default function AnalystChat({
     setLoading(true);
 
     try {
-      const resp = await askAnalyst(entityId, payload, decision, question);
+      const resp = await askAnalyst(question);
       const answer = resp?.answer ?? "No response.";
       setMessages((m) => [...m, { role: "assistant", text: answer }]);
     } catch (e: any) {
       setMessages((m) => [
         ...m,
-        { role: "assistant", text: `Analyst service error: ${e?.message || "unknown error"}` },
+        {
+          role: "assistant",
+          text: `Analyst service error: ${e?.message || "unknown error"}`,
+        },
       ]);
     } finally {
       setLoading(false);
@@ -54,7 +57,7 @@ export default function AnalystChat({
     <div className="border rounded-xl p-4 bg-white">
       <div className="flex items-center justify-between">
         <h3 className="font-semibold text-lg">Fraud Analyst Assistant</h3>
-        <span className="text-xs text-gray-500">Explain Service (8001)</span>
+        <span className="text-xs text-gray-500">Explain Service</span>
       </div>
 
       <div className="mt-3 flex flex-wrap gap-2">
