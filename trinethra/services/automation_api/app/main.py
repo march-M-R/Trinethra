@@ -12,7 +12,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 
-app = FastAPI(title="Trinetra - Automation API", version="0.3.1")
+app = FastAPI(title="Trinetra - Automation API", version="0.4.0")
+
 
 # ----------------------------
 # CORS
@@ -24,6 +25,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 # ----------------------------
 # Config
@@ -66,21 +68,6 @@ class ProcessClaimRequest(BaseModel):
     payload: Dict[str, Any] = Field(default_factory=dict)
 
 
-class ProcessClaimResponse(BaseModel):
-    action: str
-    confidence: float
-    reason_codes: List[str]
-    rule_hits: Dict[str, Any]
-    caution_mode: str
-    risk_signal: float
-    threshold: float
-    model_version: str
-    latency_ms: int
-    policy_version: str
-    business_impact: Dict[str, Any]
-    observability: Dict[str, Any]
-
-
 # ----------------------------
 # Database connection
 # ----------------------------
@@ -106,16 +93,13 @@ def _insert_event(domain, event_type, entity_id, payload):
     RETURNING event_id::text;
     """
 
-    try:
-        with _db_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    sql,
-                    (domain, event_type, entity_id, psycopg2.extras.Json(payload)),
-                )
-                return cur.fetchone()["event_id"]
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"DB insert event failed: {e}")
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                sql,
+                (domain, event_type, entity_id, psycopg2.extras.Json(payload)),
+            )
+            return cur.fetchone()["event_id"]
 
 
 # ----------------------------
@@ -138,24 +122,21 @@ def _insert_decision(
     VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
     """
 
-    try:
-        with _db_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    sql,
-                    (
-                        event_id,
-                        action,
-                        confidence,
-                        reason_codes,
-                        caution_mode,
-                        risk_signal,
-                        threshold,
-                        model_version,
-                    ),
-                )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"DB insert decision failed: {e}")
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                sql,
+                (
+                    event_id,
+                    action,
+                    confidence,
+                    reason_codes,
+                    caution_mode,
+                    risk_signal,
+                    threshold,
+                    model_version,
+                ),
+            )
 
 
 # ----------------------------
@@ -218,7 +199,7 @@ def health():
 # ----------------------------
 # Process Claim
 # ----------------------------
-@app.post("/process_claim", response_model=ProcessClaimResponse)
+@app.post("/process_claim")
 def process_claim(req: ProcessClaimRequest):
 
     event_id = _insert_event(req.domain, req.event_type, req.entity_id, req.payload)
@@ -243,22 +224,19 @@ def process_claim(req: ProcessClaimRequest):
         version,
     )
 
-    return ProcessClaimResponse(
-        action=action,
-        confidence=confidence,
-        reason_codes=reason_codes,
-        rule_hits={},
-        caution_mode=CAUTION_MODE,
-        risk_signal=risk,
-        threshold=threshold,
-        model_version=version,
-        latency_ms=latency,
-        policy_version=POLICY_VERSION,
-        business_impact={},
-        observability={
-            "llm_summary": f"Claim evaluated with risk score {risk:.2f}. Decision {action} applied based on fraud risk policy."
-        },
-    )
+    return {
+        "action": action,
+        "confidence": confidence,
+        "reason_codes": reason_codes,
+        "rule_hits": {},
+        "caution_mode": CAUTION_MODE,
+        "risk_signal": risk,
+        "threshold": threshold,
+        "model_version": version,
+        "latency_ms": latency,
+        "policy_version": POLICY_VERSION,
+        "llm_summary": f"Claim evaluated with risk score {risk:.2f}. Decision {action} applied."
+    }
 
 
 # ----------------------------
@@ -280,15 +258,12 @@ def get_decisions(limit: int = 50):
     LIMIT %s
     """
 
-    try:
-        with _db_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(sql, (limit,))
-                rows = cur.fetchall()
-        return rows
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (limit,))
+            rows = cur.fetchall()
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"DB read failed: {e}")
+    return rows
 
 
 # ----------------------------
@@ -305,24 +280,20 @@ def get_kpis():
     FROM decision_events
     """
 
-    try:
-        with _db_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(sql)
-                row = cur.fetchone()
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql)
+            row = cur.fetchone()
 
-        total = row["total"] or 0
-        approvals = row["approvals"] or 0
-        blocks = row["blocks"] or 0
+    total = row["total"] or 0
+    approvals = row["approvals"] or 0
+    blocks = row["blocks"] or 0
 
-        fraud_rate = (blocks / total) if total else 0
+    fraud_rate = (blocks / total) if total else 0
 
-        return {
-            "total_decisions": total,
-            "approvals": approvals,
-            "blocks": blocks,
-            "fraud_rate": fraud_rate
-        }
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"KPI query failed: {e}")
+    return {
+        "total": total,
+        "approvals": approvals,
+        "blocks": blocks,
+        "fraud_rate": fraud_rate
+    }
