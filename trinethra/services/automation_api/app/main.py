@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 
-app = FastAPI(title="Trinetra - Automation API", version="0.3.0")
+app = FastAPI(title="Trinetra - Automation API", version="0.3.1")
 
 # ----------------------------
 # CORS
@@ -106,13 +106,16 @@ def _insert_event(domain, event_type, entity_id, payload):
     RETURNING event_id::text;
     """
 
-    with _db_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                sql,
-                (domain, event_type, entity_id, psycopg2.extras.Json(payload)),
-            )
-            return cur.fetchone()["event_id"]
+    try:
+        with _db_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    sql,
+                    (domain, event_type, entity_id, psycopg2.extras.Json(payload)),
+                )
+                return cur.fetchone()["event_id"]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"DB insert event failed: {e}")
 
 
 # ----------------------------
@@ -135,21 +138,24 @@ def _insert_decision(
     VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
     """
 
-    with _db_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                sql,
-                (
-                    event_id,
-                    action,
-                    confidence,
-                    reason_codes,
-                    caution_mode,
-                    risk_signal,
-                    threshold,
-                    model_version,
-                ),
-            )
+    try:
+        with _db_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    sql,
+                    (
+                        event_id,
+                        action,
+                        confidence,
+                        reason_codes,
+                        caution_mode,
+                        risk_signal,
+                        threshold,
+                        model_version,
+                    ),
+                )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"DB insert decision failed: {e}")
 
 
 # ----------------------------
@@ -250,7 +256,7 @@ def process_claim(req: ProcessClaimRequest):
         policy_version=POLICY_VERSION,
         business_impact={},
         observability={
-            "llm_summary": f"Claim evaluated with risk score {risk:.2f}. Decision {action} applied."
+            "llm_summary": f"Claim evaluated with risk score {risk:.2f}. Decision {action} applied based on fraud risk policy."
         },
     )
 
@@ -263,7 +269,7 @@ def get_decisions(limit: int = 50):
 
     sql = """
     SELECT
-        decision_id,
+        decision as decision_id,
         action,
         confidence,
         caution_mode,
@@ -274,12 +280,15 @@ def get_decisions(limit: int = 50):
     LIMIT %s
     """
 
-    with _db_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql, (limit,))
-            rows = cur.fetchall()
+    try:
+        with _db_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, (limit,))
+                rows = cur.fetchall()
+        return rows
 
-    return rows
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"DB read failed: {e}")
 
 
 # ----------------------------
@@ -296,20 +305,24 @@ def get_kpis():
     FROM decision_events
     """
 
-    with _db_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql)
-            row = cur.fetchone()
+    try:
+        with _db_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql)
+                row = cur.fetchone()
 
-    total = row["total"] or 0
-    approvals = row["approvals"] or 0
-    blocks = row["blocks"] or 0
+        total = row["total"] or 0
+        approvals = row["approvals"] or 0
+        blocks = row["blocks"] or 0
 
-    fraud_rate = (blocks / total) if total else 0
+        fraud_rate = (blocks / total) if total else 0
 
-    return {
-        "total_decisions": total,
-        "approvals": approvals,
-        "blocks": blocks,
-        "fraud_rate": fraud_rate
-    }
+        return {
+            "total_decisions": total,
+            "approvals": approvals,
+            "blocks": blocks,
+            "fraud_rate": fraud_rate
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"KPI query failed: {e}")
