@@ -7,12 +7,12 @@ from typing import Any, Dict, List
 import psycopg2
 import psycopg2.extras
 import requests
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 
-app = FastAPI(title="Trinetra - Automation API", version="0.2.0")
+app = FastAPI(title="Trinetra - Automation API", version="0.3.0")
 
 # ----------------------------
 # CORS
@@ -41,6 +41,7 @@ DB_PORT = int(os.getenv("DB_PORT", "5432"))
 DB_NAME = os.getenv("DB_NAME")
 DB_USER = os.getenv("DB_USER")
 DB_PASSWORD = os.getenv("DB_PASSWORD")
+
 
 # ----------------------------
 # Policy thresholds
@@ -71,12 +72,10 @@ class ProcessClaimResponse(BaseModel):
     reason_codes: List[str]
     rule_hits: Dict[str, Any]
     caution_mode: str
-
     risk_signal: float
     threshold: float
     model_version: str
     latency_ms: int
-
     policy_version: str
     business_impact: Dict[str, Any]
     observability: Dict[str, Any]
@@ -211,47 +210,10 @@ def health():
 
 
 # ----------------------------
-# Get decisions endpoint
-# ----------------------------
-@app.get("/decisions")
-def get_decisions(limit: int = Query(50, ge=1, le=200)):
-
-    sql = """
-    SELECT
-        decision_id,
-        action,
-        confidence,
-        risk_signal,
-        caution_mode,
-        model_version,
-        timestamp
-    FROM decision_events
-    ORDER BY timestamp DESC
-    LIMIT %s
-    """
-
-    try:
-        with _db_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute(sql, (limit,))
-                rows = cur.fetchall()
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"DB read failed: {e}")
-
-    return {
-        "count": len(rows),
-        "decisions": rows
-    }
-
-
-# ----------------------------
-# Main endpoint
+# Process Claim
 # ----------------------------
 @app.post("/process_claim", response_model=ProcessClaimResponse)
 def process_claim(req: ProcessClaimRequest):
-
-    start = time.time()
 
     event_id = _insert_event(req.domain, req.event_type, req.entity_id, req.payload)
 
@@ -287,5 +249,67 @@ def process_claim(req: ProcessClaimRequest):
         latency_ms=latency,
         policy_version=POLICY_VERSION,
         business_impact={},
-        observability={},
+        observability={
+            "llm_summary": f"Claim evaluated with risk score {risk:.2f}. Decision {action} applied."
+        },
     )
+
+
+# ----------------------------
+# Decisions endpoint
+# ----------------------------
+@app.get("/decisions")
+def get_decisions(limit: int = 50):
+
+    sql = """
+    SELECT
+        decision_id,
+        action,
+        confidence,
+        caution_mode,
+        risk_signal,
+        model_version
+    FROM decision_events
+    ORDER BY timestamp DESC
+    LIMIT %s
+    """
+
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, (limit,))
+            rows = cur.fetchall()
+
+    return rows
+
+
+# ----------------------------
+# KPI endpoint
+# ----------------------------
+@app.get("/kpis")
+def get_kpis():
+
+    sql = """
+    SELECT
+        COUNT(*) as total,
+        SUM(CASE WHEN action='AUTO_APPROVE' THEN 1 ELSE 0 END) as approvals,
+        SUM(CASE WHEN action='BLOCK' THEN 1 ELSE 0 END) as blocks
+    FROM decision_events
+    """
+
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql)
+            row = cur.fetchone()
+
+    total = row["total"] or 0
+    approvals = row["approvals"] or 0
+    blocks = row["blocks"] or 0
+
+    fraud_rate = (blocks / total) if total else 0
+
+    return {
+        "total_decisions": total,
+        "approvals": approvals,
+        "blocks": blocks,
+        "fraud_rate": fraud_rate
+    }
