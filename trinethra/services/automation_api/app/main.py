@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import psycopg2
 import psycopg2.extras
 import requests
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -15,21 +15,11 @@ from pydantic import BaseModel, Field
 app = FastAPI(title="Trinetra - Automation API", version="0.2.0")
 
 # ----------------------------
-# CORS (allow Vercel frontend)
+# CORS
 # ----------------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-
-        # Vercel deployments
-        "https://trinethra.vercel.app",
-        "https://trinethra-git-main-marchs-projects-31a05593.vercel.app",
-        "https://trinethra-odret1til-marchs-projects-31a05593.vercel.app",
-    ],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -41,16 +31,19 @@ app.add_middleware(
 CAUTION_MODE = os.getenv("CAUTION_MODE", "GREEN").upper()
 POLICY_VERSION = os.getenv("POLICY_VERSION", "policy_v2")
 
-MODEL_URL = os.getenv("MODEL_URL", "http://127.0.0.1:8002/predict")
+MODEL_URL = os.getenv(
+    "MODEL_URL",
+    "https://trinethra-model-service.onrender.com",
+)
 
-DB_HOST = os.getenv("DB_HOST", "localhost")
+DB_HOST = os.getenv("DB_HOST")
 DB_PORT = int(os.getenv("DB_PORT", "5432"))
-DB_NAME = os.getenv("DB_NAME", "trinethra")
-DB_USER = os.getenv("DB_USER", "trinethra_user")
-DB_PASSWORD = os.getenv("DB_PASSWORD", "trinethra_pass")
+DB_NAME = os.getenv("DB_NAME")
+DB_USER = os.getenv("DB_USER")
+DB_PASSWORD = os.getenv("DB_PASSWORD")
 
 # ----------------------------
-# Policy cutoffs
+# Policy thresholds
 # ----------------------------
 DEFAULT_POLICY = {
     "GREEN": {"approve_cutoff": 0.70, "block_cutoff": 0.92},
@@ -58,26 +51,16 @@ DEFAULT_POLICY = {
     "RED": {"approve_cutoff": 0.60, "block_cutoff": 0.85},
 }
 
-APPROVE_CUTOFF = float(
-    os.getenv(
-        "APPROVE_CUTOFF",
-        DEFAULT_POLICY.get(CAUTION_MODE, DEFAULT_POLICY["GREEN"])["approve_cutoff"],
-    )
-)
-BLOCK_CUTOFF = float(
-    os.getenv(
-        "BLOCK_CUTOFF",
-        DEFAULT_POLICY.get(CAUTION_MODE, DEFAULT_POLICY["GREEN"])["block_cutoff"],
-    )
-)
+APPROVE_CUTOFF = DEFAULT_POLICY[CAUTION_MODE]["approve_cutoff"]
+BLOCK_CUTOFF = DEFAULT_POLICY[CAUTION_MODE]["block_cutoff"]
 
 # ----------------------------
 # Schemas
 # ----------------------------
 class ProcessClaimRequest(BaseModel):
-    domain: str = Field(..., examples=["claims"])
-    event_type: str = Field(..., examples=["claim_submitted"])
-    entity_id: str = Field(..., examples=["CLM-0001"])
+    domain: str
+    event_type: str
+    entity_id: str
     payload: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -94,12 +77,12 @@ class ProcessClaimResponse(BaseModel):
     latency_ms: int
 
     policy_version: str
-    business_impact: Dict[str, Any] = Field(default_factory=dict)
-    observability: Dict[str, Any] = Field(default_factory=dict)
+    business_impact: Dict[str, Any]
+    observability: Dict[str, Any]
 
 
 # ----------------------------
-# DB helpers
+# Database connection
 # ----------------------------
 def _db_conn():
     return psycopg2.connect(
@@ -112,133 +95,113 @@ def _db_conn():
     )
 
 
-def _insert_event(domain: str, event_type: str, entity_id: str, payload: Dict[str, Any]) -> str:
+# ----------------------------
+# Insert event
+# ----------------------------
+def _insert_event(domain, event_type, entity_id, payload):
+
     sql = """
     INSERT INTO events (domain, event_type, entity_id, payload)
-    VALUES (%(domain)s, %(event_type)s, %(entity_id)s, %(payload)s::jsonb)
+    VALUES (%s,%s,%s,%s::jsonb)
     RETURNING event_id::text;
     """
 
     with _db_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                sql,
-                {
-                    "domain": domain,
-                    "event_type": event_type,
-                    "entity_id": entity_id,
-                    "payload": psycopg2.extras.Json(payload),
-                },
-            )
-            row = cur.fetchone()
-            return str(row["event_id"])
+            cur.execute(sql, (domain, event_type, entity_id, psycopg2.extras.Json(payload)))
+            return cur.fetchone()["event_id"]
 
 
+# ----------------------------
+# Insert decision
+# ----------------------------
 def _insert_decision(
-    event_id: str,
-    action: str,
-    confidence: float,
-    reason_codes: List[str],
-    caution_mode: str,
-    risk_signal: float,
-    threshold: float,
-    model_version: str,
-    rule_hits: Optional[List[str]] = None,
-) -> str:
-
-    rule_hits = rule_hits or []
+    event_id,
+    action,
+    confidence,
+    reason_codes,
+    caution_mode,
+    risk_signal,
+    threshold,
+    model_version,
+):
 
     sql = """
-    INSERT INTO decision_events (
-      event_id, action, confidence, reason_codes, rule_hits, caution_mode,
-      risk_signal, threshold, model_version
-    )
-    VALUES (
-      %(event_id)s::uuid, %(action)s, %(confidence)s,
-      %(reason_codes)s::text[], %(rule_hits)s::text[], %(caution_mode)s,
-      %(risk_signal)s, %(threshold)s, %(model_version)s
-    )
-    RETURNING decision_id::text;
+    INSERT INTO decision_events
+    (event_id,action,confidence,reason_codes,caution_mode,risk_signal,threshold,model_version)
+    VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
     """
 
     with _db_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 sql,
-                {
-                    "event_id": event_id,
-                    "action": action,
-                    "confidence": confidence,
-                    "reason_codes": reason_codes,
-                    "rule_hits": rule_hits,
-                    "caution_mode": caution_mode,
-                    "risk_signal": risk_signal,
-                    "threshold": threshold,
-                    "model_version": model_version,
-                },
+                (
+                    event_id,
+                    action,
+                    confidence,
+                    reason_codes,
+                    caution_mode,
+                    risk_signal,
+                    threshold,
+                    model_version,
+                ),
             )
-            row = cur.fetchone()
-            return str(row["decision_id"])
 
 
 # ----------------------------
-# Model call
+# Call model service
 # ----------------------------
-def _call_model(payload: Dict[str, Any]) -> Dict[str, Any]:
+def _call_model(entity_id: str):
 
-    if payload is None:
-        payload = {}
+    url = f"{MODEL_URL}/explain/{entity_id}"
 
-    if not isinstance(payload, dict):
-        raise HTTPException(status_code=400, detail="payload must be a JSON object")
-
-    req_json = {"payload": payload}
-
-    t0 = time.time()
+    start = time.time()
 
     try:
-        r = requests.post(MODEL_URL, json=req_json, timeout=10)
+        r = requests.post(url, json={}, timeout=10)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"model-service call failed: {e}")
 
-    latency_ms = int((time.time() - t0) * 1000)
+    latency = int((time.time() - start) * 1000)
 
     if r.status_code != 200:
-        raise HTTPException(
-            status_code=502,
-            detail=f"model-service call failed: {r.status_code} {r.text}",
-        )
+        raise HTTPException(status_code=502, detail=r.text)
 
     data = r.json()
 
-    for k in ("risk_signal", "threshold", "model_version"):
-        if k not in data:
-            raise HTTPException(status_code=502, detail=f"model-service returned missing key: {k}")
+    # convert explain output → risk score
+    risk_signal = float(
+        data.get("kpis_considered", {}).get("avg_risk_signal", 0.5)
+    )
 
-    data["latency_ms"] = int(data.get("latency_ms") or latency_ms)
-
-    return data
+    return {
+        "risk_signal": risk_signal,
+        "threshold": APPROVE_CUTOFF,
+        "model_version": "explain_service_v1",
+        "latency_ms": latency,
+    }
 
 
 # ----------------------------
-# Decision policy
+# Decision logic
 # ----------------------------
-def _decide(risk: float) -> Tuple[str, float, List[str]]:
+def _decide(risk: float):
 
     if risk >= BLOCK_CUTOFF:
-        return ("BLOCK", 0.95, ["MODEL_RISK_BLOCK_CUTOFF"])
+        return "BLOCK", 0.95, ["MODEL_RISK_BLOCK_CUTOFF"]
 
     if risk < APPROVE_CUTOFF:
-        return ("AUTO_APPROVE", 0.85, ["MODEL_RISK_BELOW_APPROVE_CUTOFF"])
+        return "AUTO_APPROVE", 0.85, ["MODEL_RISK_BELOW_APPROVE_CUTOFF"]
 
-    return ("ROUTE_TO_REVIEW", 0.90, ["MODEL_RISK_IN_REVIEW_BAND"])
+    return "ROUTE_TO_REVIEW", 0.9, ["MODEL_RISK_IN_REVIEW_BAND"]
 
 
 # ----------------------------
-# Endpoints
+# Health endpoint
 # ----------------------------
 @app.get("/health")
-def health() -> Dict[str, Any]:
+def health():
 
     return {
         "status": "ok",
@@ -248,41 +211,35 @@ def health() -> Dict[str, Any]:
     }
 
 
+# ----------------------------
+# Main endpoint
+# ----------------------------
 @app.post("/process_claim", response_model=ProcessClaimResponse)
-def process_claim(req: ProcessClaimRequest) -> ProcessClaimResponse:
+def process_claim(req: ProcessClaimRequest):
 
-    overall_t0 = time.time()
+    start = time.time()
 
-    try:
-        event_id = _insert_event(req.domain, req.event_type, req.entity_id, req.payload)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"DB insert into events failed: {e}")
+    event_id = _insert_event(req.domain, req.event_type, req.entity_id, req.payload)
 
-    model = _call_model(req.payload)
+    model = _call_model(req.entity_id)
 
-    risk = float(model["risk_signal"])
-    thr = float(model["threshold"])
-    ver = str(model["model_version"])
-    model_latency = int(model.get("latency_ms") or 0)
+    risk = model["risk_signal"]
+    threshold = model["threshold"]
+    version = model["model_version"]
+    latency = model["latency_ms"]
 
     action, confidence, reason_codes = _decide(risk)
 
-    try:
-        _insert_decision(
-            event_id=event_id,
-            action=action,
-            confidence=confidence,
-            reason_codes=reason_codes,
-            caution_mode=CAUTION_MODE,
-            risk_signal=risk,
-            threshold=thr,
-            model_version=ver,
-            rule_hits=[],
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"DB insert into decision_events failed: {e}")
-
-    overall_latency_ms = int((time.time() - overall_t0) * 1000)
+    _insert_decision(
+        event_id,
+        action,
+        confidence,
+        reason_codes,
+        CAUTION_MODE,
+        risk,
+        threshold,
+        version,
+    )
 
     return ProcessClaimResponse(
         action=action,
@@ -291,9 +248,9 @@ def process_claim(req: ProcessClaimRequest) -> ProcessClaimResponse:
         rule_hits={},
         caution_mode=CAUTION_MODE,
         risk_signal=risk,
-        threshold=thr,
-        model_version=ver,
-        latency_ms=overall_latency_ms if overall_latency_ms > model_latency else model_latency,
+        threshold=threshold,
+        model_version=version,
+        latency_ms=latency,
         policy_version=POLICY_VERSION,
         business_impact={},
         observability={},
