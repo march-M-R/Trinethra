@@ -36,7 +36,9 @@ export default function NewClaimPage() {
       setDecision(null);
       setExplanation(null);
 
-      const payload = {
+      const requestBody = {
+        claim_id: claimId,
+        policy_id: policyId,
         claim_type: "AUTO",
         amount: Number(amount),
         zip,
@@ -50,17 +52,10 @@ export default function NewClaimPage() {
         injury_involved: injury,
       };
 
-      const event = {
-        domain: "claims",
-        event_type: "claim_submitted",
-        entity_id: claimId,
-        payload,
-      };
-
-      const decisionResponse = await processClaim(event);
+      const decisionResponse = await processClaim(requestBody);
       setDecision(decisionResponse);
 
-      const explanationResponse = await getExplanation(claimId, payload, {
+      const explanationResponse = await getExplanation(claimId, requestBody, {
         action: decisionResponse.action,
         risk_signal: decisionResponse.risk_signal,
         confidence: decisionResponse.confidence,
@@ -100,69 +95,126 @@ export default function NewClaimPage() {
         </header>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          
           {/* LEFT PANEL */}
           <div className="border rounded bg-white p-6 space-y-4">
             <h3 className="font-semibold text-lg">Auto Claim Intake Form</h3>
 
             <div>
               <label className="text-sm">Claim ID</label>
-              <input className="w-full border rounded p-2" value={claimId} onChange={(e) => setClaimId(e.target.value)} />
+              <input
+                className="w-full border rounded p-2"
+                value={claimId}
+                onChange={(e) => setClaimId(e.target.value)}
+              />
             </div>
 
             <div>
               <label className="text-sm">Policy ID</label>
-              <input className="w-full border rounded p-2" value={policyId} onChange={(e) => setPolicyId(e.target.value)} />
+              <input
+                className="w-full border rounded p-2"
+                value={policyId}
+                onChange={(e) => setPolicyId(e.target.value)}
+              />
             </div>
 
             <div>
               <label className="text-sm">Claim Type</label>
-              <input className="w-full border rounded p-2 bg-gray-100" value="AUTO" readOnly />
+              <input
+                className="w-full border rounded p-2 bg-gray-100"
+                value="AUTO"
+                readOnly
+              />
             </div>
 
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="text-sm">Amount ($)</label>
-                <input type="number" className="w-full border rounded p-2" value={amount} onChange={(e) => setAmount(Number(e.target.value))} />
+                <input
+                  type="number"
+                  className="w-full border rounded p-2"
+                  value={amount}
+                  onChange={(e) => setAmount(Number(e.target.value))}
+                />
               </div>
 
               <div>
                 <label className="text-sm">ZIP</label>
-                <input className="w-full border rounded p-2" value={zip} onChange={(e) => setZip(e.target.value)} />
+                <input
+                  className="w-full border rounded p-2"
+                  value={zip}
+                  onChange={(e) => setZip(e.target.value)}
+                />
               </div>
             </div>
 
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="text-sm">Incident Date</label>
-                <input type="date" className="w-full border rounded p-2" value={incidentDate} onChange={(e) => setIncidentDate(e.target.value)} />
+                <input
+                  type="date"
+                  className="w-full border rounded p-2"
+                  value={incidentDate}
+                  onChange={(e) => setIncidentDate(e.target.value)}
+                />
               </div>
 
               <div>
                 <label className="text-sm">Days since policy start</label>
-                <input type="number" className="w-full border rounded p-2" value={daysSincePolicyStart} onChange={(e) => setDaysSincePolicyStart(Number(e.target.value))} />
+                <input
+                  type="number"
+                  className="w-full border rounded p-2"
+                  value={daysSincePolicyStart}
+                  onChange={(e) =>
+                    setDaysSincePolicyStart(Number(e.target.value))
+                  }
+                />
               </div>
             </div>
 
             <div className="grid grid-cols-3 gap-3">
               <div>
                 <label className="text-sm">Age</label>
-                <input type="number" className="w-full border rounded p-2" value={age} onChange={(e) => setAge(Number(e.target.value))} />
+                <input
+                  type="number"
+                  className="w-full border rounded p-2"
+                  value={age}
+                  onChange={(e) => setAge(Number(e.target.value))}
+                />
               </div>
 
               <div>
                 <label className="text-sm">Years with insurer</label>
-                <input type="number" className="w-full border rounded p-2" value={yearsWithInsurer} onChange={(e) => setYearsWithInsurer(Number(e.target.value))} />
+                <input
+                  type="number"
+                  className="w-full border rounded p-2"
+                  value={yearsWithInsurer}
+                  onChange={(e) =>
+                    setYearsWithInsurer(Number(e.target.value))
+                  }
+                />
               </div>
 
               <div>
                 <label className="text-sm">Previous claims</label>
-                <input type="number" className="w-full border rounded p-2" value={previousClaims} onChange={(e) => setPreviousClaims(Number(e.target.value))} />
+                <input
+                  type="number"
+                  className="w-full border rounded p-2"
+                  value={previousClaims}
+                  onChange={(e) =>
+                    setPreviousClaims(Number(e.target.value))
+                  }
+                />
               </div>
             </div>
 
             <div>
               <label className="text-sm">Channel</label>
-              <select className="w-full border rounded p-2" value={channel} onChange={(e) => setChannel(e.target.value)}>
+              <select
+                className="w-full border rounded p-2"
+                value={channel}
+                onChange={(e) => setChannel(e.target.value)}
+              >
                 <option>Agent</option>
                 <option>Online</option>
                 <option>Call Center</option>
@@ -172,17 +224,28 @@ export default function NewClaimPage() {
 
             <div className="flex gap-6">
               <label className="flex gap-2 text-sm">
-                <input type="checkbox" checked={policeReport} onChange={(e) => setPoliceReport(e.target.checked)} />
+                <input
+                  type="checkbox"
+                  checked={policeReport}
+                  onChange={(e) => setPoliceReport(e.target.checked)}
+                />
                 Police report filed
               </label>
 
               <label className="flex gap-2 text-sm">
-                <input type="checkbox" checked={injury} onChange={(e) => setInjury(e.target.checked)} />
+                <input
+                  type="checkbox"
+                  checked={injury}
+                  onChange={(e) => setInjury(e.target.checked)}
+                />
                 Injury involved
               </label>
             </div>
 
-            <button onClick={onEvaluate} className="w-full bg-black text-white py-3 rounded font-semibold">
+            <button
+              onClick={onEvaluate}
+              className="w-full bg-black text-white py-3 rounded font-semibold"
+            >
               {loading ? "Evaluating..." : "Evaluate Claim"}
             </button>
 
@@ -197,7 +260,11 @@ export default function NewClaimPage() {
           <div className="border rounded bg-white p-6 space-y-4">
             <h3 className="font-semibold text-lg">Decision Result</h3>
 
-            {!decision && <p className="text-gray-600">Fill the form and click Evaluate Claim.</p>}
+            {!decision && (
+              <p className="text-gray-600">
+                Fill the form and click Evaluate Claim.
+              </p>
+            )}
 
             {decision && (
               <>
@@ -223,27 +290,35 @@ export default function NewClaimPage() {
                   </div>
                 </div>
 
-                {Array.isArray(explanation?.key_factors) && explanation.key_factors.length > 0 && (
-                  <div>
-                    <h4 className="font-semibold">Key Factors</h4>
-                    <ul className="list-disc pl-5 text-sm space-y-1">
-                      {explanation.key_factors.map((item: string, idx: number) => (
-                        <li key={idx}>{item}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
+                {Array.isArray(explanation?.key_factors) &&
+                  explanation.key_factors.length > 0 && (
+                    <div>
+                      <h4 className="font-semibold">Key Factors</h4>
+                      <ul className="list-disc pl-5 text-sm space-y-1">
+                        {explanation.key_factors.map(
+                          (item: string, idx: number) => (
+                            <li key={idx}>{item}</li>
+                          )
+                        )}
+                      </ul>
+                    </div>
+                  )}
 
-                {Array.isArray(explanation?.next_steps) && explanation.next_steps.length > 0 && (
-                  <div>
-                    <h4 className="font-semibold">Recommended Next Steps</h4>
-                    <ul className="list-disc pl-5 text-sm space-y-1">
-                      {explanation.next_steps.map((item: string, idx: number) => (
-                        <li key={idx}>{item}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
+                {Array.isArray(explanation?.next_steps) &&
+                  explanation.next_steps.length > 0 && (
+                    <div>
+                      <h4 className="font-semibold">
+                        Recommended Next Steps
+                      </h4>
+                      <ul className="list-disc pl-5 text-sm space-y-1">
+                        {explanation.next_steps.map(
+                          (item: string, idx: number) => (
+                            <li key={idx}>{item}</li>
+                          )
+                        )}
+                      </ul>
+                    </div>
+                  )}
               </>
             )}
           </div>
