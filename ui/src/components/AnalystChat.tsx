@@ -6,13 +6,13 @@ import { askAnalyst } from "@/lib/api";
 type Msg = { role: "user" | "assistant"; text: string };
 
 export default function AnalystChat({
-  entityId: _entityId,
-  payload: _payload,
-  decision: _decision,
+  entityId,
+  payload,
+  decision,
 }: {
   entityId: string;
-  payload: any;
-  decision: any;
+  payload: Record<string, unknown>;
+  decision: Record<string, unknown>;
 }) {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [q, setQ] = useState("");
@@ -37,15 +37,19 @@ export default function AnalystChat({
     setLoading(true);
 
     try {
-      const resp = await askAnalyst(question);
+      const resp = await askAnalyst(question, {
+        claim_id: entityId,
+        payload,
+        decision,
+      });
       const answer = resp?.answer ?? "No response.";
       setMessages((m) => [...m, { role: "assistant", text: answer }]);
-    } catch (e: any) {
+    } catch (e: unknown) {
       setMessages((m) => [
         ...m,
         {
           role: "assistant",
-          text: `Analyst service error: ${e?.message || "unknown error"}`,
+          text: `Analyst service error: ${errorMessage(e)}`,
         },
       ]);
     } finally {
@@ -117,4 +121,8 @@ export default function AnalystChat({
       </div>
     </div>
   );
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "unknown error";
 }

@@ -1,192 +1,33 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { getDecisionById } from "@/lib/api";
+import { getDecisionById, type DecisionRow } from "@/lib/api";
+import { EmptyState, ErrorNotice, Icon, PageHeader, StatusBadge, formatDate } from "@/components/Workspace";
 
 export default function DecisionDetailPage() {
-  const params = useParams();
-  const id = String(params?.id ?? "");
-
-  const [data, setData] = useState<any>(null);
+  const { id } = useParams<{ id: string }>();
+  const [data, setData] = useState<DecisionRow | null>(null);
   const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState<string | null>(null);
-
+  const [error, setError] = useState(false);
+  const [refresh, setRefresh] = useState(0);
   useEffect(() => {
     let alive = true;
-
-    async function load() {
-      if (!id) {
-        if (alive) {
-          setErr("Missing decision id.");
-          setLoading(false);
-        }
-        return;
-      }
-
-      try {
-        setLoading(true);
-        setErr(null);
-
-        const d = await getDecisionById(id);
-
-        if (!alive) return;
-        setData(d ?? null);
-      } catch (e: any) {
-        if (!alive) return;
-        setErr(e?.message ?? "Failed to load decision.");
-        setData(null);
-      } finally {
-        if (!alive) return;
-        setLoading(false);
-      }
-    }
-
-    load();
-
-    return () => {
-      alive = false;
-    };
-  }, [id]);
-
-  const pretty = useMemo(() => {
-    if (!data) return null;
-
-    return {
-      decisionId: data.decision_id ?? data.id ?? id,
-      action: (data.action ?? data.outcome ?? data.decision ?? "-")
-        .toString()
-        .toUpperCase(),
-      risk: Number(data.risk_signal ?? data.risk_score ?? data.score ?? 0),
-      confidence: Number(data.confidence ?? 0),
-      mode: (data.caution_mode ?? data.mode ?? "-").toString(),
-      modelVersion: (data.model_version ?? data.model ?? "-").toString(),
-      latencyMs: Number(data.latency_ms ?? 0),
-      reasonCodes: data.reason_codes ?? [],
-      timestamp: data.timestamp ?? data.event_time ?? data.created_at ?? "-",
-    };
-  }, [data, id]);
-
-  return (
-    <main className="min-h-screen bg-gray-50 p-6">
-      <div className="max-w-6xl mx-auto space-y-6">
-        <header className="flex items-start justify-between gap-4">
-          <div>
-            <h1 className="text-3xl font-bold tracking-tight">Decision Detail</h1>
-            <p className="mt-2 text-sm text-gray-600">
-              Detailed record for an automated insurance claim decision
-            </p>
-          </div>
-
-          <div className="flex gap-3">
-            <Link
-              href="/dashboard"
-              className="rounded-xl border border-gray-300 bg-white px-4 py-2.5 text-sm font-semibold text-gray-800 hover:bg-gray-50"
-            >
-              Dashboard
-            </Link>
-            <Link
-              href="/decisions"
-              className="rounded-xl border border-gray-300 bg-white px-4 py-2.5 text-sm font-semibold text-gray-800 hover:bg-gray-50"
-            >
-              Back to Decisions
-            </Link>
-          </div>
-        </header>
-
-        <div className="rounded-3xl border border-gray-200 bg-white p-6 shadow-sm">
-          <div className="text-sm text-gray-500">Decision ID</div>
-          <div className="mt-1 font-mono text-base text-gray-900">
-            {id || "-"}
-          </div>
-        </div>
-
-        {loading && (
-          <div className="rounded-3xl border border-gray-200 bg-white p-6 shadow-sm text-gray-600">
-            Loading decision details…
-          </div>
-        )}
-
-        {err && !loading && (
-          <div className="rounded-3xl border border-red-200 bg-red-50 p-6 text-red-700 shadow-sm">
-            {err}
-          </div>
-        )}
-
-        {!loading && !err && pretty && (
-          <>
-            <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-              <StatCard title="Action" value={pretty.action} />
-              <StatCard title="Risk Signal" value={pretty.risk.toFixed(3)} />
-              <StatCard title="Confidence" value={pretty.confidence.toFixed(2)} />
-              <StatCard title="Mode" value={pretty.mode} />
-            </section>
-
-            <section className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-              <div className="rounded-3xl border border-gray-200 bg-white p-6 shadow-sm">
-                <h2 className="text-lg font-semibold">Decision Metadata</h2>
-                <div className="mt-4 space-y-3 text-sm">
-                  <Row label="Decision ID" value={String(pretty.decisionId)} mono />
-                  <Row label="Model Version" value={pretty.modelVersion} />
-                  <Row label="Latency" value={`${pretty.latencyMs} ms`} />
-                  <Row label="Timestamp" value={String(pretty.timestamp)} />
-                </div>
-              </div>
-
-              <div className="rounded-3xl border border-gray-200 bg-white p-6 shadow-sm">
-                <h2 className="text-lg font-semibold">Reason Codes</h2>
-                {Array.isArray(pretty.reasonCodes) && pretty.reasonCodes.length > 0 ? (
-                  <ul className="mt-4 list-disc pl-5 text-sm space-y-2 text-gray-800">
-                    {pretty.reasonCodes.map((code: string, idx: number) => (
-                      <li key={idx} className="font-mono">
-                        {code}
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <div className="mt-4 text-sm text-gray-500">
-                    No reason codes available.
-                  </div>
-                )}
-              </div>
-            </section>
-
-            <section className="rounded-3xl border border-gray-200 bg-white p-6 shadow-sm">
-              <h2 className="text-lg font-semibold">Raw Decision Record</h2>
-              <pre className="mt-4 overflow-auto rounded-2xl bg-gray-50 p-4 text-xs text-gray-800">
-                {JSON.stringify(data, null, 2)}
-              </pre>
-            </section>
-          </>
-        )}
-      </div>
-    </main>
-  );
-}
-
-function StatCard({ title, value }: { title: string; value: string }) {
-  return (
-    <div className="rounded-3xl border border-gray-200 bg-white p-5 shadow-sm">
-      <div className="text-sm font-medium text-gray-500">{title}</div>
-      <div className="mt-2 text-2xl font-bold tracking-tight">{value}</div>
-    </div>
-  );
-}
-
-function Row({
-  label,
-  value,
-  mono = false,
-}: {
-  label: string;
-  value: string;
-  mono?: boolean;
-}) {
-  return (
-    <div className="flex items-start justify-between gap-4 border-b border-gray-100 pb-3 last:border-0 last:pb-0">
-      <div className="text-gray-500">{label}</div>
-      <div className={mono ? "font-mono text-right" : "text-right"}>{value}</div>
-    </div>
-  );
+    getDecisionById(id).then(row => { if (alive) { setData(row); setError(false); } }).catch(() => { if (alive) setError(true); }).finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [id, refresh]);
+  const observability = data?.observability as { degraded?: boolean; warning?: string; decision_summary?: string; input_limitations?: string } | undefined;
+  const payload = data?.payload as Record<string, unknown> | undefined;
+  return <><PageHeader eyebrow="BEHIND THE DECISION" title={data?.claim_id ?? "The claim, in context."} description="A complete record of the outcome, its reasoning, and the information considered."><Link href="/decisions" className="button secondary">Back to decisions <Icon name="arrow" size={14}/></Link></PageHeader>
+    {error && <ErrorNotice message="We couldn’t retrieve this decision. Check the link or try again." retry={() => { setLoading(true); setRefresh(v => v + 1); }}/>}
+    {loading ? <div className="panel" role="status" aria-label="Loading decision"><div className="loading-block"/></div> : data ? <>
+      {observability?.degraded && <div role="alert" className="notice"><strong>Human review required.</strong> Scoring was degraded. {observability.warning}</div>}
+      <section className="metrics-grid" aria-label="Decision summary"><div className="metric featured"><div className="metric-header">Recorded outcome<Icon name="shield" size={17}/></div><div style={{ margin: "22px 0 14px" }}><StatusBadge action={data.action}/></div><div className="metric-note">Saved to the decision record</div></div><div className="metric"><div className="metric-header">Risk score<Icon name="activity" size={17}/></div><div className="metric-value">{data.risk_signal?.toFixed(3) ?? "—"}</div><div className="metric-note">Not a confirmed fraud probability</div></div><div className="metric"><div className="metric-header">Review threshold<Icon name="clock" size={17}/></div><div className="metric-value">{data.threshold?.toFixed(3) ?? "—"}</div><div className="metric-note">Saved model operating threshold</div></div><div className="metric"><div className="metric-header">Scoring mode<Icon name="file" size={17}/></div><div className="metric-value" style={{ fontSize: 25, marginTop: 15 }}>{observability?.degraded ? "Degraded" : data.caution_mode === "GREEN" ? "Standard" : data.caution_mode ?? "—"}</div><div className="metric-note">Confidence is not calibrated</div></div></section>
+      <div className="detail-grid"><section className="panel"><div className="panel-head"><h2>Decision record</h2><Icon name="file" size={17}/></div><div className="panel-body"><dl className="metadata-list">{[["Decision ID", data.decision_id ?? id], ["Claim ID", data.claim_id ?? "—"], ["Created", formatDate(data.timestamp)], ["Model version", data.model_version ?? "—"], ["Policy version", data.policy_version ?? "—"], ["Model call latency", data.latency_ms == null ? "—" : `${data.latency_ms} ms`]].map(([label, value]) => <div key={label}><dt>{label}</dt><dd className={label.includes("ID") ? "mono" : ""}>{value}</dd></div>)}</dl></div></section>
+      <section className="panel"><div className="panel-head"><h2>Why this outcome?</h2><Icon name="shield" size={17}/></div><div className="panel-body">{observability?.decision_summary && <p className="muted" style={{ fontSize: 12, lineHeight: 1.9, marginBottom: 23 }}>{observability.decision_summary}</p>}<ul className="reason-list">{data.reason_codes?.length ? data.reason_codes.map(code => <li key={code}><Icon name="check" size={15}/><span>{code.toLowerCase().replaceAll("_", " ")}</span></li>) : <li>No reason codes were recorded.</li>}</ul><p className="muted" style={{ fontSize: 10, lineHeight: 1.8, marginTop: 24 }}>{observability?.input_limitations ?? "Reason codes describe the decision policy. They are not measured model feature contributions."}</p></div></section></div>
+      {payload && <section className="panel" style={{ marginTop: 22 }}><div className="panel-head"><h2>Claim information</h2></div><div className="panel-body"><dl className="metadata-list">{Object.entries(payload).map(([key, value]) => <div key={key}><dt style={{ textTransform: "capitalize" }}>{key.replaceAll("_", " ")}</dt><dd>{typeof value === "boolean" ? value ? "Yes" : "No" : String(value ?? "—")}</dd></div>)}</dl></div></section>}
+      <details className="panel code-details"><summary>View original decision data</summary><pre>{JSON.stringify(data, null, 2)}</pre></details>
+    </> : !error && <section className="panel"><EmptyState title="Decision not found" description="This record may no longer be available. Return to the decision history to find another claim."/></section>}
+  </>;
 }

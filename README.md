@@ -1,6 +1,6 @@
 # Trinetra — Insurance Automation Platform
 
-> An intelligent, end-to-end insurance automation platform powered by AI/ML — streamlining claims, detecting fraud, managing policies, and assessing risk with precision.
+> A prototype for vehicle insurance claim triage, fraud risk screening, decision tracking, and reviewer support.
 
 ## 🎬 Demo
 
@@ -10,99 +10,88 @@
 
 ## 🚀 Features
 
-- **⚡ Claims Automation** — Automates end-to-end insurance claim processing, reducing manual effort and turnaround time
-- **🔍 Fraud Detection** — AI-powered anomaly detection to identify and flag suspicious claims in real time
-- **📋 Policy Management** — Centralized dashboard to create, manage, and track insurance policies efficiently
-- **📊 Risk Assessment** — ML models that evaluate and score risk profiles for smarter underwriting decisions
+- **Claim intake and triage** — Submit vehicle claims and route them using a model risk score.
+- **Review support** — Browse decisions, an investigator queue, and template explanations.
+- **Decision history** — Store claim inputs, decisions, model/policy versions, and scoring warnings.
+- **Monitoring** — View decision counts and block rates; these are not confirmed fraud outcomes.
+
+The current implementation does not manage policy lifecycles or execute payouts.
 
 ---
 
-## 🏗 Architecture Overview
+## Architecture
+
+Next.js / React / TypeScript UI → FastAPI automation API → XGBoost model service.
+PostgreSQL stores claims and decisions. Separate FastAPI services provide monitoring
+and template explanations. Docker uses PostgreSQL with the pgvector extension;
+policy retrieval and OpenAI helpers are experimental and are not wired into the active explanation endpoints.
+
+## Decision behavior and limitations
+
+- Scores below the saved model threshold are eligible for automatic approval;
+  scores at or above it go to review. Automatic blocking is disabled by default.
+  An optional `BLOCK_CUTOFF` environment variable enables a separate blocking policy
+  and must exceed the model threshold. No blocking cutoff has been validated here.
+- Failed predictions use an explicitly marked fallback scorer. These results always
+  go to human review, with warnings saved in the decision history.
+- The intake is a partial match to the training schema. Age, previous claims, police
+  report, channel, and policy age are mapped; missing vehicle attributes use defaults.
+  Claim amount is not used to invent vehicle value or deductible. This model needs
+  representative data and validation before operational use.
+- Scores are not calibrated fraud probabilities. Decision confidence is unavailable;
+  the legacy database column stores zero for schema compatibility and the API returns null.
+- Explanations describe recorded scores, thresholds, and claim facts. They do not
+  measure model feature contributions. Portfolio statistics do not determine decisions.
+- KPI summaries default to the last 24 hours (`window_hours=1..720`). Block rate is
+  the fraction of decisions blocked, not confirmed fraud prevalence.
+- Future training selects the operating threshold on validation data. The bundled
+  model and metrics were not retrained; their original threshold used the test split,
+  so those metrics are not an independent evaluation of that threshold.
+
+## Checks
+
+Install service dependencies and `httpx` in a Python environment, then run:
+
+```bash
+python -m unittest discover -s tests -v
+cd ui
+npm run lint
+npx tsc --noEmit
+npm run build
 ```
-├── Frontend (React)
-│   ├── Policy Management Dashboard
-│   ├── Claims Tracking UI
-│   ├── Risk Assessment Reports
-│   └── Fraud Alert Interface
-│
-├── Backend (Python)
-│   ├── REST APIs
-│   ├── Business Logic Layer
-│   └── Database Models
-│
-└── AI/ML Engine (Python)
-    ├── Fraud Detection Model
-    ├── Risk Scoring Model
-    └── Claims Classification Model
-```
-
----
-
-## 🛠 Tech Stack
-
-**Frontend**
-
-![React](https://img.shields.io/badge/React-%2320232a.svg?style=for-the-badge&logo=react&logoColor=%2361DAFB)
-![JavaScript](https://img.shields.io/badge/JavaScript-%23323330.svg?style=for-the-badge&logo=javascript&logoColor=%23F7DF1E)
-
-**Backend & AI/ML**
-
-![Python](https://img.shields.io/badge/Python-3670A0?style=for-the-badge&logo=python&logoColor=ffdd54)
-![scikit-learn](https://img.shields.io/badge/scikit--learn-%23F7931E.svg?style=for-the-badge&logo=scikit-learn&logoColor=white)
-![TensorFlow](https://img.shields.io/badge/TensorFlow-%23FF6F00.svg?style=for-the-badge&logo=TensorFlow&logoColor=white)
-![FastAPI](https://img.shields.io/badge/FastAPI-005571?style=for-the-badge&logo=fastapi)
-
-**Database**
-
-![MySQL](https://img.shields.io/badge/MySQL-4479A1?style=for-the-badge&logo=mysql&logoColor=white)
-
----
 
 ## ⚙️ Installation
 
-### Prerequisites
-- Python 3.8+
-- Node.js 16+
-- MySQL
+### Recommended setup
 
-### Backend Setup
+Prerequisite: Docker Desktop or another Docker Compose installation.
+
 ```bash
-# Clone the repository
 git clone https://github.com/march-M-R/trinetra.git
 cd trinetra
-
-# Create a virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Run the backend server
-python app.py
+docker compose -f trinethra/infra/docker-compose.yml up --build
 ```
 
-### Frontend Setup
+Open http://localhost:3000. Interactive API documentation is available at:
+
+- Explanation service: http://localhost:8001/docs
+- Model service: http://localhost:8002/docs
+- Automation API: http://localhost:8003/docs
+- Monitoring service: http://localhost:8004/docs
+
+### Frontend-only development
+
 ```bash
-# Navigate to frontend directory
-cd frontend
-
-# Install dependencies
-npm install
-
-# Start the development server
-npm start
+cd ui
+npm ci
+npm run dev
 ```
 
-### Environment Variables
+Point it at locally running services if needed:
 
-Create a `.env` file in the root directory:
 ```env
-DB_HOST=your_database_host
-DB_USER=your_database_user
-DB_PASSWORD=your_database_password
-DB_NAME=trinetra_db
-SECRET_KEY=your_secret_key
+NEXT_PUBLIC_AUTOMATION_API_BASE=http://localhost:8003
+NEXT_PUBLIC_EXPLAIN_API_BASE=http://localhost:8001
 ```
 
 ---
@@ -117,3 +106,21 @@ SECRET_KEY=your_secret_key
 ---
 
 > ⭐ If you found this project useful, consider giving it a star!
+
+## Production deployment
+
+The existing frontend is hosted on Vercel at https://trinethra.vercel.app.
+Use `ui` as the Vercel project root. Frontend API calls use same-origin
+`/api/automation` routes; configure `AUTOMATION_API_BASE` on the server to point
+to the automation service. The older `NEXT_PUBLIC_AUTOMATION_API_BASE` variable
+is also accepted by the server for compatibility.
+
+Template explanations and analyst responses are served by the frontend's
+`/api/explain` routes, so the public website does not require a separate explanation
+service. These are deterministic templates, not LLM feature attributions.
+
+The automation service requires a working PostgreSQL database (`DATABASE_URL`,
+or `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`) and `MODEL_URL`.
+Initialize new databases with `trinethra/infra/sql/001_init.sql` before serving
+claims. Its `/health` endpoint returns HTTP 503 if the database or decision table
+is unavailable. A frontend-only deployment does not restore an unavailable database.

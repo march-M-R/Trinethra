@@ -1,396 +1,65 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import {
-  ResponsiveContainer,
-  LineChart,
-  Line,
-  CartesianGrid,
-  XAxis,
-  YAxis,
-  Tooltip,
-  AreaChart,
-  Area,
-} from "recharts";
-import { getKpiSummary, getDecisions } from "@/lib/api";
-
-type Kpis = {
-  total_decisions: number;
-  approvals: number;
-  blocks: number;
-  fraud_rate: number;
-};
-
-function toNum(v: any) {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : 0;
-}
-
-function sumKeys(obj: Record<string, any>, predicate: (k: string) => boolean) {
-  return Object.entries(obj || {}).reduce((acc, [k, v]) => {
-    if (!predicate(k)) return acc;
-    return acc + toNum(v);
-  }, 0);
-}
+import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { getDecisions, getKpiSummary, type DecisionRow, type KpiSummary } from "@/lib/api";
+import { EmptyState, ErrorNotice, Icon, PageHeader } from "@/components/Workspace";
+import DecisionTable from "@/components/DecisionTable";
 
 export default function DashboardPage() {
-  const [kpis, setKpis] = useState<Kpis>({
-    total_decisions: 0,
-    approvals: 0,
-    blocks: 0,
-    fraud_rate: 0,
-  });
-
-  const [recent, setRecent] = useState<any[]>([]);
-  const [err, setErr] = useState<string | null>(null);
+  const [kpis, setKpis] = useState<KpiSummary | null>(null);
+  const [recent, setRecent] = useState<DecisionRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [windowHours, setWindowHours] = useState(24);
+  const [refresh, setRefresh] = useState(0);
 
+  const retry = useCallback(() => setRefresh(value => value + 1), []);
   useEffect(() => {
     let alive = true;
-
+    let pending = false;
     async function load() {
+      if (pending) return;
+      pending = true;
       try {
-        setErr(null);
-        setLoading(true);
-
-        const [k, d] = await Promise.all([getKpiSummary(24), getDecisions(20)]);
-        if (!alive) return;
-
-        const total = toNum(k?.total_decisions ?? 0);
-        const byAction: Record<string, any> = k?.by_action ?? {};
-
-        const approvals = sumKeys(byAction, (key) =>
-          key.toUpperCase().includes("APPROVE")
-        );
-
-        const blocks = sumKeys(byAction, (key) =>
-          key.toUpperCase().includes("BLOCK")
-        );
-
-        const fraudRate = total > 0 ? (blocks / total) * 100 : 0;
-
-        setKpis({
-          total_decisions: total,
-          approvals,
-          blocks,
-          fraud_rate: fraudRate,
-        });
-
-        setRecent(Array.isArray(d) ? d : []);
-      } catch (e: any) {
-        if (!alive) return;
-        setErr(e?.message ?? "Failed to load dashboard");
-        setRecent([]);
-        setKpis({
-          total_decisions: 0,
-          approvals: 0,
-          blocks: 0,
-          fraud_rate: 0,
-        });
-      } finally {
-        if (!alive) return;
-        setLoading(false);
-      }
+        const [summary, decisions] = await Promise.all([getKpiSummary(windowHours), getDecisions(20)]);
+        if (alive) { setKpis(summary); setRecent(decisions); setError(null); }
+      } catch (e) { if (alive) setError(e instanceof Error ? e.message : "Please check your connection and try again."); }
+      finally { pending = false; if (alive) setLoading(false); }
     }
-
     load();
-    const t = setInterval(load, 5000);
-    return () => {
-      alive = false;
-      clearInterval(t);
-    };
-  }, []);
+    const interval = setInterval(load, 15000);
+    return () => { alive = false; clearInterval(interval); };
+  }, [windowHours, refresh]);
 
-  const chartData = useMemo(() => {
-    const arr = Array.isArray(recent) ? recent : [];
-    return arr
-      .slice(0, 12)
-      .reverse()
-      .map((r: any, idx: number) => ({
-        name: (r.decision_id ?? r.id ?? `#${idx + 1}`).toString().slice(0, 6),
-        risk: toNum(r.risk_signal ?? r.risk_score ?? r.score ?? 0),
-        confidence: toNum(r.confidence ?? 0),
-      }));
-  }, [recent]);
-
-  const latest = recent?.[0];
-  const latestAction = (latest?.action ?? latest?.outcome ?? latest?.decision ?? "")
-    .toString()
-    .toUpperCase();
-
-  return (
-    <main className="min-h-screen bg-gradient-to-b from-gray-50 to-white text-gray-900">
-      <div className="max-w-7xl mx-auto px-6 py-8 space-y-8">
-        <header className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            <div className="inline-flex items-center rounded-full border border-gray-200 bg-white px-3 py-1 text-xs font-medium text-gray-600 shadow-sm">
-              Trinetra · Insurance Risk Intelligence
-            </div>
-            <h1 className="mt-3 text-3xl font-bold tracking-tight">
-              Decision Intelligence Dashboard
-            </h1>
-            <p className="mt-2 text-sm text-gray-600 max-w-2xl">
-              Monitor automated claim decisions, fraud risk movement, and recent
-              review activity across the platform.
-            </p>
-          </div>
-
-          <div className="flex flex-wrap gap-3">
-            <Link
-              href="/new-claim"
-              className="rounded-xl bg-black px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:opacity-90"
-            >
-              Evaluate New Claim
-            </Link>
-            <Link
-              href="/decisions"
-              className="rounded-xl border border-gray-300 bg-white px-4 py-2.5 text-sm font-semibold text-gray-800 hover:bg-gray-50"
-            >
-              View Decisions
-            </Link>
-          </div>
-        </header>
-
-        {err && (
-          <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-            {err}
-          </div>
-        )}
-
-        <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <MetricCard
-            title="Total Decisions"
-            value={kpis.total_decisions}
-            subtitle="Last 24 hours"
-          />
-          <MetricCard
-            title="Approvals"
-            value={kpis.approvals}
-            subtitle="Auto-approved cases"
-          />
-          <MetricCard
-            title="Blocks"
-            value={kpis.blocks}
-            subtitle="High-risk prevented"
-          />
-          <MetricCard
-            title="Fraud Rate"
-            value={`${kpis.fraud_rate.toFixed(2)}%`}
-            subtitle="Block share of total"
-          />
-        </section>
-
-        <section className="grid grid-cols-1 gap-6 xl:grid-cols-3">
-          <div className="xl:col-span-2 rounded-3xl border border-gray-200 bg-white p-6 shadow-sm">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <h2 className="text-lg font-semibold">Risk Signal Trend</h2>
-                <p className="text-sm text-gray-500">
-                  Recent decision risk trajectory across processed claims
-                </p>
-              </div>
-              <div className="rounded-full bg-gray-100 px-3 py-1 text-xs font-medium text-gray-600">
-                Auto-refresh · 5s
-              </div>
-            </div>
-
-            <div className="mt-6 h-[320px] w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={chartData}>
-                  <defs>
-                    <linearGradient id="riskFill" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopOpacity={0.25} />
-                      <stop offset="95%" stopOpacity={0.02} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                  <XAxis dataKey="name" />
-                  <YAxis domain={[0, 1]} />
-                  <Tooltip />
-                  <Area
-                    type="monotone"
-                    dataKey="risk"
-                    strokeWidth={2}
-                    fillOpacity={1}
-                    fill="url(#riskFill)"
-                  />
-                  <Line type="monotone" dataKey="risk" dot={false} strokeWidth={2} />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-
-          <div className="rounded-3xl border border-gray-200 bg-white p-6 shadow-sm">
-            <h2 className="text-lg font-semibold">Latest Decision Snapshot</h2>
-            <p className="mt-1 text-sm text-gray-500">
-              Most recent decision captured by the platform
-            </p>
-
-            {latest ? (
-              <div className="mt-5 space-y-4">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-gray-500">Decision ID</span>
-                  <span className="font-mono text-sm text-gray-800">
-                    {String(latest.decision_id ?? latest.id ?? "-").slice(0, 12)}
-                  </span>
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-gray-500">Action</span>
-                  <OutcomeBadge action={latestAction} />
-                </div>
-
-                <div className="grid grid-cols-2 gap-3 pt-2">
-                  <MiniStat
-                    label="Risk"
-                    value={toNum(
-                      latest?.risk_signal ?? latest?.risk_score ?? latest?.score ?? 0
-                    ).toFixed(3)}
-                  />
-                  <MiniStat
-                    label="Confidence"
-                    value={toNum(latest?.confidence ?? 0).toFixed(2)}
-                  />
-                  <MiniStat
-                    label="Mode"
-                    value={String(latest?.caution_mode ?? latest?.mode ?? "-")}
-                  />
-                  <MiniStat
-                    label="Latency"
-                    value={`${toNum(latest?.latency_ms ?? 0)} ms`}
-                  />
-                </div>
-
-                <Link
-                  href={`/decisions/${encodeURIComponent(
-                    String(latest?.decision_id ?? latest?.id ?? "")
-                  )}`}
-                  className="mt-2 inline-flex rounded-xl border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-800 hover:bg-gray-50"
-                >
-                  Open Decision
-                </Link>
-              </div>
-            ) : (
-              <div className="mt-6 rounded-2xl border border-dashed border-gray-300 bg-gray-50 p-6 text-sm text-gray-500">
-                No decisions yet.
-              </div>
-            )}
-          </div>
-        </section>
-
-        <section className="rounded-3xl border border-gray-200 bg-white p-6 shadow-sm">
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="text-lg font-semibold">Recent Decisions</h2>
-              <p className="text-sm text-gray-500">
-                Latest outcomes from the automation pipeline
-              </p>
-            </div>
-            {loading && (
-              <span className="text-xs font-medium text-gray-500">Refreshing…</span>
-            )}
-          </div>
-
-          <div className="mt-5 overflow-x-auto">
-            <table className="min-w-full text-sm">
-              <thead>
-                <tr className="border-b border-gray-200 text-left text-gray-500">
-                  <th className="pb-3 font-medium">Decision ID</th>
-                  <th className="pb-3 font-medium">Action</th>
-                  <th className="pb-3 font-medium">Risk</th>
-                  <th className="pb-3 font-medium">Confidence</th>
-                  <th className="pb-3 font-medium">Mode</th>
-                  <th className="pb-3 font-medium">Model</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(Array.isArray(recent) ? recent : []).slice(0, 8).map((r: any) => {
-                  const id = (r.decision_id ?? r.id ?? "").toString();
-                  const action = (r.action ?? r.outcome ?? r.decision ?? "")
-                    .toString()
-                    .toUpperCase();
-                  const risk = toNum(r.risk_signal ?? r.risk_score ?? r.score ?? 0);
-                  const conf = toNum(r.confidence ?? 0);
-                  const mode = (r.caution_mode ?? r.mode ?? "").toString();
-                  const model = (r.model_version ?? r.model ?? "-").toString();
-
-                  return (
-                    <tr key={id} className="border-b border-gray-100 last:border-0">
-                      <td className="py-4 pr-4">
-                        <Link
-                          href={id ? `/decisions/${encodeURIComponent(id)}` : "/decisions"}
-                          className="font-mono text-gray-800 hover:underline"
-                        >
-                          {id.slice(0, 12) || "—"}
-                        </Link>
-                      </td>
-                      <td className="py-4 pr-4">
-                        <OutcomeBadge action={action} />
-                      </td>
-                      <td className="py-4 pr-4">{risk.toFixed(3)}</td>
-                      <td className="py-4 pr-4">{conf.toFixed(2)}</td>
-                      <td className="py-4 pr-4">{mode || "-"}</td>
-                      <td className="py-4 pr-4">{model}</td>
-                    </tr>
-                  );
-                })}
-
-                {(!recent || recent.length === 0) && (
-                  <tr>
-                    <td colSpan={6} className="py-8 text-center text-sm text-gray-500">
-                      No decisions yet.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      </div>
-    </main>
-  );
-}
-
-function MetricCard({
-  title,
-  value,
-  subtitle,
-}: {
-  title: string;
-  value: string | number;
-  subtitle: string;
-}) {
-  return (
-    <div className="rounded-3xl border border-gray-200 bg-white p-5 shadow-sm">
-      <div className="text-sm font-medium text-gray-500">{title}</div>
-      <div className="mt-2 text-3xl font-bold tracking-tight">{value}</div>
-      <div className="mt-2 text-xs text-gray-500">{subtitle}</div>
-    </div>
-  );
-}
-
-function MiniStat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-2xl border border-gray-200 bg-gray-50 p-3">
-      <div className="text-xs text-gray-500">{label}</div>
-      <div className="mt-1 text-sm font-semibold text-gray-900">{value}</div>
-    </div>
-  );
-}
-
-function OutcomeBadge({ action }: { action: string }) {
-  const a = (action || "").toUpperCase();
-  const cls =
-    a.includes("BLOCK")
-      ? "bg-red-100 text-red-800 border-red-200"
-      : a.includes("APPROVE")
-      ? "bg-green-100 text-green-800 border-green-200"
-      : "bg-yellow-100 text-yellow-800 border-yellow-200";
-
-  return (
-    <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${cls}`}>
-      {a || "-"}
-    </span>
-  );
+  const total = kpis?.total_decisions ?? kpis?.total ?? 0;
+  const approvals = kpis?.approvals ?? kpis?.by_action?.AUTO_APPROVE ?? 0;
+  const reviews = kpis?.reviews ?? kpis?.by_action?.ROUTE_TO_REVIEW ?? 0;
+  const blocks = kpis?.blocks ?? kpis?.by_action?.BLOCK ?? 0;
+  const distribution = [
+    { name: "Auto-approved", value: approvals, color: "#718c7f" },
+    { name: "Needs review", value: reviews, color: "#b6a074" },
+    { name: "Blocked", value: blocks, color: "#ae8980" },
+  ];
+  const chartData = [...recent].reverse().map((row, index) => ({ name: String(index + 1).padStart(2, "0"), risk: row.risk_signal ?? row.risk_score ?? null, claim: row.claim_id ?? "Claim" }));
+  const metricValue = (value: number, suffix = "") => loading || !kpis ? "—" : value.toLocaleString(undefined, { maximumFractionDigits: suffix ? 1 : 0 }) + suffix;
+  return <>
+    <PageHeader eyebrow="CLAIMS INTELLIGENCE" title="Portfolio overview" description="A considered view of your claims, decisions, and review activity.">
+      <label className="sr-only" htmlFor="time-window">Reporting period</label><select id="time-window" style={{ width: "auto", fontSize: 11 }} value={windowHours} onChange={e => { setLoading(true); setWindowHours(Number(e.target.value)); }}><option value={24}>Last 24 hours</option><option value={168}>Last 7 days</option><option value={720}>Last 30 days</option></select>
+      <Link className="button primary" href="/new-claim"><Icon name="plus" size={15}/> Evaluate claim</Link>
+    </PageHeader>
+    {error && <ErrorNotice message={kpis ? "The latest refresh failed. Previously loaded data is shown." : "Your services may be starting up. No live data is available yet."} retry={retry}/>}
+    <section className="metrics-grid" aria-label="Portfolio metrics">
+      {[{ label: "Claims processed", value: metricValue(total), icon: "file", note: "In the selected period", cls: "featured" }, { label: "Auto-approved", value: metricValue(approvals), icon: "check", note: "Eligible for standard checks", cls: "" }, { label: "Needs review", value: metricValue(reviews), icon: "clock", note: "Routed to human review", cls: "warning" }, { label: "Block rate", value: metricValue(total ? blocks / total * 100 : 0, "%"), icon: "shield", note: "Share of decisions blocked", cls: "" }].map(metric => <article className={`metric ${metric.cls}`} key={metric.label}><div className="metric-header">{metric.label}<span className="metric-icon"><Icon name={metric.icon} size={16}/></span></div><div className="metric-value">{metric.value}</div><div className="metric-note"><span/>{metric.note}</div></article>)}
+    </section>
+    <section className="dashboard-middle">
+      <article className="panel"><div className="panel-head"><div><h2>Risk overview</h2><p>Risk scores across the latest processed claims</p></div><span className="subtle-tag"><Icon name="activity" size={12}/> Latest 20 decisions</span></div>
+        {loading ? <div className="loading-block" style={{ height: 190 }}/> : recent.length ? <div className="chart-wrap"><ResponsiveContainer width="100%" height="100%"><AreaChart data={chartData} margin={{ top: 5, right: 10, left: -20, bottom: 5 }}><defs><linearGradient id="riskGradient" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#b6a074" stopOpacity={.25}/><stop offset="100%" stopColor="#b6a074" stopOpacity={.01}/></linearGradient></defs><CartesianGrid stroke="#e2e5da" strokeDasharray="3 5" vertical={false}/><XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: "#8d9c80", fontSize: 9 }} dy={10}/><YAxis domain={[0, 1]} axisLine={false} tickLine={false} tick={{ fill: "#8d9c80", fontSize: 9 }} ticks={[0, .25, .5, .75, 1]}/><Tooltip contentStyle={{ background: "#fffef9", color: "#5d7451", border: "1px solid #dce3cf", borderRadius: 8, fontSize: 11 }} formatter={value => [Number(value).toFixed(3), "Risk score"]} labelFormatter={(_, payload) => payload[0]?.payload?.claim ?? "Claim"}/><Area type="monotone" dataKey="risk" stroke="#8b9e7d" strokeWidth={2} fill="url(#riskGradient)" connectNulls={false} activeDot={{ r: 4, fill: "#7b946a", stroke: "white", strokeWidth: 2 }}/></AreaChart></ResponsiveContainer></div> : <div className="empty-chart"><EmptyState icon="activity" title={error ? "Risk data is unavailable" : "Your risk picture starts here"} description="Claim scores will appear as you evaluate claims. No sample data is shown."/></div>}
+        <div className="chart-foot"><span className="chart-legend">Model risk score · 0 to 1</span><span>Refreshes every 15 seconds</span></div>
+      </article>
+      <article className="panel"><div className="panel-head"><div><h2>Decision outcomes</h2><p>Decision mix in the selected period</p></div></div><div className="panel-body" style={{ paddingBottom: 12 }}><div className="distribution-total"><strong>{loading || !kpis ? "—" : total.toLocaleString()}</strong><span>total decisions</span></div><div className="distribution-bar" aria-label="Decision distribution">{distribution.map(item => <span key={item.name} style={{ width: `${total ? item.value / total * 100 : 0}%`, background: item.color }}/>)}</div>{distribution.map(item => <div className="distribution-row" key={item.name}><span><i className="legend-square" style={{ background: item.color }}/>{item.name}</span><strong>{kpis ? item.value : "—"}<small>{kpis ? `${total ? (item.value / total * 100).toFixed(0) : 0}%` : ""}</small></strong></div>)}</div><Link className="review-callout" href="/investigator"><span>Give complex claims a closer look.</span><Icon name="arrow" size={16}/></Link></article>
+    </section>
+    <section className="panel"><div className="panel-head" style={{ paddingBottom: 21 }}><div><h2>Recent decisions</h2><p>A traceable record of each claim and its outcome</p></div><Link className="text-link" href="/decisions">View all <Icon name="arrow" size={14}/></Link></div><DecisionTable rows={recent.slice(0, 5)} loading={loading} emptyTitle={error ? "Decision history is unavailable" : "Ready for your first claim?"} emptyDescription={error ? "Reconnect to the service to view recorded decisions." : "Evaluate a claim to see its outcome and risk score here."}/><div className="table-footer"><span>Latest {Math.min(recent.length, 5)} decisions · All time</span><span>Scores support review; they do not confirm fraud.</span></div></section>
+  </>;
 }

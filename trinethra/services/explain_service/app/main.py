@@ -29,6 +29,13 @@ class ExplainRequest(BaseModel):
     decision: Dict[str, Any] = Field(default_factory=dict)
 
 
+class AnalystRequest(BaseModel):
+    question: str
+    claim_id: str | None = None
+    payload: Dict[str, Any] = Field(default_factory=dict)
+    decision: Dict[str, Any] = Field(default_factory=dict)
+
+
 def _safe_num(x: Any, default: float = 0.0) -> float:
     try:
         return float(x)
@@ -64,31 +71,17 @@ def _fetch_kpis(window_hours: int = 24) -> Dict[str, Any]:
 
 
 def _build_key_factors(payload: Dict[str, Any], decision: Dict[str, Any]) -> List[str]:
-    factors: List[str] = []
-
-    amount = _safe_num(payload.get("amount"), 0)
-    prev_claims = _safe_int(payload.get("previous_claims"), 0)
-    days_since = _safe_int(payload.get("days_since_policy_start"), 0)
-    police = bool(payload.get("police_report_filed", False))
-    injury = bool(payload.get("injury_involved", False))
-    risk = _safe_num(decision.get("risk_signal"), 0)
-
-    if amount >= 1000:
-        factors.append(f"Claim amount of ${amount:,.0f} is material enough to warrant scrutiny.")
-    if prev_claims >= 2:
-        factors.append(f"Previous claims count is {prev_claims}, which increases review sensitivity.")
-    if 0 < days_since <= 30:
-        factors.append("Claim occurred shortly after policy inception, which can indicate higher risk.")
-    if not police and amount >= 1000:
-        factors.append("No police report is available despite a non-trivial claim amount.")
-    if injury:
-        factors.append("Injury involvement increases case complexity and review need.")
-    if risk >= 0.70:
-        factors.append(f"Predicted fraud risk score is elevated at {risk:.3f}.")
-
-    if not factors:
-        factors.append("No dominant red flag was detected beyond the model score and policy thresholds.")
-
+    # These are observed intake facts, not model feature attributions.
+    factors = ["The following are claim facts for review, not measured causes of the model score."]
+    for field, label in [("amount", "Claim amount"), ("previous_claims", "Previous claims"),
+                         ("days_since_policy_start", "Days since policy start"),
+                         ("police_report_filed", "Police report filed"),
+                         ("injury_involved", "Injury involved")]:
+        if field in payload:
+            factors.append(f"{label}: {payload[field]}.")
+    observability = decision.get("observability") or {}
+    if decision.get("degraded") or observability.get("degraded"):
+        factors.append("Scoring is degraded; human review is required.")
     return factors
 
 
@@ -114,41 +107,22 @@ def _build_next_steps(action: str) -> List[str]:
 
 
 def _build_summary(payload: Dict[str, Any], decision: Dict[str, Any], kpis: Dict[str, Any]) -> str:
-    action = (decision.get("action") or "UNKNOWN").upper()
-    risk = _safe_num(decision.get("risk_signal"), 0)
-    confidence = _safe_num(decision.get("confidence"), 0)
-
-    total_decisions = _safe_int(kpis.get("total_decisions"), 0)
-    by_action = kpis.get("by_action") or {}
-    blocks = _safe_int(by_action.get("BLOCK"), 0)
-    block_rate = (blocks / total_decisions * 100) if total_decisions > 0 else 0
-    avg_risk = _safe_num(kpis.get("avg_risk_signal"), 0)
-
-    if action == "AUTO_APPROVE":
-        return (
-            f"This claim was automatically approved because its fraud risk score of {risk:.3f} "
-            f"falls within the safe approval range, with model confidence of {confidence:.2f}. "
-            f"In the current monitoring window, the platform has processed {total_decisions} claims "
-            f"with an average risk score of {avg_risk:.3f}. Based on both claim-level and recent platform-level "
-            f"signals, the case can proceed through standard settlement checks."
-        )
-
-    if action == "BLOCK":
-        return (
-            f"This claim was automatically blocked because its fraud risk score of {risk:.3f} "
-            f"exceeds the blocking threshold, with model confidence of {confidence:.2f}. "
-            f"In the current monitoring window, the platform has processed {total_decisions} claims "
-            f"and is currently blocking {block_rate:.2f}% of them, indicating active fraud control. "
-            f"Given both the claim-level score and the current portfolio risk posture, escalation for investigation is appropriate."
-        )
-
-    return (
-        f"This claim has been routed to manual review because its fraud risk score of {risk:.3f} "
-        f"falls within the review band, with model confidence of {confidence:.2f}. "
-        f"In the current monitoring window, the platform has processed {total_decisions} claims, "
-        f"with a block rate of {block_rate:.2f}% and an average risk score of {avg_risk:.3f}. "
-        f"Given the elevated claim-level risk and current platform-wide risk posture, human validation is recommended before settlement."
-    )
+    action = str(decision.get("action") or "UNKNOWN").upper()
+    observability = decision.get("observability") or {}
+    if decision.get("degraded") or observability.get("degraded"):
+        rationale = "The model is degraded; the fallback score cannot authorize approval or blocking. Human review is required."
+    elif decision.get("risk_signal") is not None and decision.get("threshold") is not None:
+        risk = _safe_num(decision["risk_signal"])
+        threshold = _safe_num(decision["threshold"])
+        relation = "below" if risk < threshold else "at or above"
+        rationale = f"Risk score {risk:.3f} is {relation} the model review threshold {threshold:.3f}."
+        if action == "BLOCK":
+            rationale += " An explicitly configured blocking policy was applied."
+    else:
+        rationale = "Score or threshold is unavailable; the decision rationale cannot be verified."
+    return (f"Recorded decision: {action}. {rationale} "
+            "This is a template explanation of recorded decision fields, not model feature attribution. "
+            "Portfolio metrics are context only and did not determine this decision.")
 
 
 @app.get("/health")
@@ -168,6 +142,7 @@ def explain_claim(claim_id: str, req: ExplainRequest):
         next_steps = _build_next_steps(decision.get("action", ""))
 
         return {
+            "explanation_method": "template",
             "claim_id": claim_id,
             "summary": summary,
             "key_factors": key_factors,
@@ -181,3 +156,29 @@ def explain_claim(claim_id: str, req: ExplainRequest):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Explain failed: {e}")
+
+
+@app.post("/analyst")
+def analyst(req: AnalystRequest):
+    question = req.question.strip()
+    if not question:
+        raise HTTPException(status_code=422, detail="Question must not be empty")
+
+    action = str(req.decision.get("action") or "UNKNOWN").upper()
+    factors = _build_key_factors(req.payload, req.decision)
+    next_steps = _build_next_steps(action)
+    q = question.lower()
+
+    if "next" in q or "check" in q or "document" in q:
+        answer = "Recommended checks: " + " ".join(next_steps)
+    elif "siu" in q or "handoff" in q:
+        answer = (
+            f"SIU handoff for {req.claim_id or 'this claim'}: decision {action}. "
+            + " ".join(factors)
+            + " "
+            + " ".join(next_steps)
+        )
+    else:
+        answer = f"The current decision is {action}. " + " ".join(factors)
+
+    return {"answer": answer, "claim_id": req.claim_id, "action": action}

@@ -22,7 +22,7 @@ def pick_threshold_under_fpr(y_true: np.ndarray, y_proba: np.ndarray, max_fpr: f
     if len(valid) == 0:
         return float(0.99)
     best_idx = valid[np.argmax(tpr[valid])]
-    return float(thr[best_idx])
+    return float(min(thr[best_idx], 1.0))
 
 
 def metrics_at_threshold(y_true: np.ndarray, y_proba: np.ndarray, thr: float) -> Dict[str, float]:
@@ -124,7 +124,9 @@ def main():
     roc_auc = float(roc_auc_score(y_test, proba_test))
     pr_auc = float(average_precision_score(y_test, proba_test))
 
-    thr = pick_threshold_under_fpr(y_test, proba_test, args.max_fpr)
+    # Choose policy on validation data; reserve test labels for evaluation only.
+    proba_val = booster.predict(dval)
+    thr = pick_threshold_under_fpr(y_val, proba_val, args.max_fpr)
     thr_metrics = metrics_at_threshold(y_test, proba_test, thr)
 
     version = args.version or datetime.utcnow().strftime("v%Y%m%d_%H%M%S")

@@ -17,10 +17,12 @@ export type ProcessClaimRequest = {
 };
 
 export type ProcessClaimResponse = {
+  degraded?: boolean;
+  warning?: string | null;
   action?: string;
-  confidence?: number;
+  confidence?: number | null;
   reason_codes?: string[];
-  rule_hits?: Record<string, unknown>;
+  rule_hits?: string[];
   caution_mode?: string;
   risk_signal?: number;
   threshold?: number;
@@ -37,6 +39,7 @@ export type ProcessClaimResponse = {
 };
 
 export type DecisionRow = {
+  id?: string;
   decision_id?: string;
   event_id?: string;
   claim_id?: string;
@@ -44,24 +47,46 @@ export type DecisionRow = {
   outcome?: string;
   decision?: string;
   score?: number;
-  confidence?: number;
+  confidence?: number | null;
   risk_signal?: number;
+  risk_score?: number;
   caution_mode?: string;
   mode?: string;
   model_version?: string;
+  model?: string;
   policy_version?: string;
+  latency_ms?: number;
+  reason_codes?: string[];
+  rule_hits?: string[];
+  threshold?: number;
   created_at?: string;
   timestamp?: string;
   [key: string]: unknown;
 };
 
-const AUTOMATION_BASE =
-  process.env.NEXT_PUBLIC_AUTOMATION_API_BASE ??
-  "https://trinethra-automation-api.onrender.com";
+export type KpiSummary = {
+  total?: number;
+  total_decisions?: number;
+  approvals?: number;
+  blocks?: number;
+  reviews?: number;
+  block_rate?: number;
+  by_action?: Record<string, number>;
+};
 
-const EXPLAIN_BASE =
-  process.env.NEXT_PUBLIC_EXPLAIN_API_BASE ??
-  "https://trinethra-model-service.onrender.com";
+export type ExplanationResponse = {
+  claim_id: string;
+  summary: string;
+  key_factors: string[];
+  next_steps: string[];
+  kpis_considered?: Record<string, unknown>;
+};
+
+export type AnalystResponse = { answer: string };
+
+// Same-origin routes avoid cross-origin failures and keep service URLs server-side.
+const AUTOMATION_BASE = "/api/automation";
+const EXPLAIN_BASE = "/api/explain";
 
 async function http<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, {
@@ -71,14 +96,19 @@ async function http<T>(url: string, init?: RequestInit): Promise<T> {
       ...(init?.headers ?? {}),
     },
     cache: "no-store",
+    signal: init?.signal ?? AbortSignal.timeout(60000),
   });
 
   const text = await res.text();
   const data = text ? safeJsonParse(text) : null;
 
   if (!res.ok) {
+    const errorData =
+      data && typeof data === "object"
+        ? (data as { detail?: unknown; message?: unknown; error?: unknown })
+        : null;
     const msg =
-      (data && (data.detail || data.message || data.error)) ||
+      (errorData && (errorData.detail || errorData.message || errorData.error)) ||
       text ||
       `${res.status} ${res.statusText}`;
     throw new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
@@ -87,7 +117,7 @@ async function http<T>(url: string, init?: RequestInit): Promise<T> {
   return (data as T) ?? ({} as T);
 }
 
-function safeJsonParse(s: string) {
+function safeJsonParse(s: string): unknown {
   try {
     return JSON.parse(s);
   } catch {
@@ -113,10 +143,13 @@ export async function processClaim(
  * Backend may return an array directly or { items: [...] }.
  */
 export async function getDecisions(limit = 50): Promise<DecisionRow[]> {
-  const data = await http<any>(`${AUTOMATION_BASE}/decisions?limit=${limit}`);
+  const data = await http<unknown>(`${AUTOMATION_BASE}/decisions?limit=${limit}`);
   if (Array.isArray(data)) return data as DecisionRow[];
-  if (Array.isArray(data?.items)) return data.items as DecisionRow[];
-  if (Array.isArray(data?.decisions)) return data.decisions as DecisionRow[];
+  if (data && typeof data === "object") {
+    const wrapped = data as { items?: unknown; decisions?: unknown };
+    if (Array.isArray(wrapped.items)) return wrapped.items as DecisionRow[];
+    if (Array.isArray(wrapped.decisions)) return wrapped.decisions as DecisionRow[];
+  }
   return [];
 }
 
@@ -125,13 +158,9 @@ export async function getDecisions(limit = 50): Promise<DecisionRow[]> {
  * Returns null if your backend doesn't implement /decisions/{id}.
  */
 export async function getDecisionById(id: string): Promise<DecisionRow | null> {
-  try {
-    return await http<DecisionRow>(
-      `${AUTOMATION_BASE}/decisions/${encodeURIComponent(id)}`
-    );
-  } catch {
-    return null;
-  }
+  return http<DecisionRow>(
+    `${AUTOMATION_BASE}/decisions/${encodeURIComponent(id)}`
+  );
 }
 
 /**
@@ -139,8 +168,7 @@ export async function getDecisionById(id: string): Promise<DecisionRow | null> {
  * Uses automation service, not monitoring service.
  */
 export async function getKpiSummary(windowHours = 24) {
-  void windowHours;
-  return http<any>(`${AUTOMATION_BASE}/kpis`);
+  return http<KpiSummary>(`${AUTOMATION_BASE}/kpis?window_hours=${windowHours}`);
 }
 
 /**
@@ -148,10 +176,10 @@ export async function getKpiSummary(windowHours = 24) {
  */
 export async function getExplanation(
   claimId: string,
-  payload: Record<string, any>,
-  decision: Record<string, any>
+  payload: Record<string, unknown>,
+  decision: Record<string, unknown>
 ) {
-  return http<any>(`${EXPLAIN_BASE}/explain/${encodeURIComponent(claimId)}`, {
+  return http<ExplanationResponse>(`${EXPLAIN_BASE}/explain/${encodeURIComponent(claimId)}`, {
     method: "POST",
     body: JSON.stringify({ payload, decision }),
   });
@@ -160,9 +188,16 @@ export async function getExplanation(
 /**
  * Analyst endpoint
  */
-export async function askAnalyst(question: string) {
-  return http<any>(`${EXPLAIN_BASE}/analyst`, {
+export async function askAnalyst(
+  question: string,
+  context: {
+    claim_id?: string;
+    payload?: Record<string, unknown>;
+    decision?: Record<string, unknown>;
+  } = {}
+) {
+  return http<AnalystResponse>(`${EXPLAIN_BASE}/analyst`, {
     method: "POST",
-    body: JSON.stringify({ question }),
+    body: JSON.stringify({ question, ...context }),
   });
 }

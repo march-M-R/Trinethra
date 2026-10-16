@@ -8,14 +8,11 @@ import os
 from dataclasses import dataclass
 from typing import Any, Dict, Tuple, List
 
-import joblib
-import pandas as pd
-import xgboost as xgb
 
 
 # repo root: .../trinethra/trinethra
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-MODELS_DIR = os.path.join(REPO_ROOT, "models")
+MODELS_DIR = os.getenv("MODELS_DIR", os.path.join(REPO_ROOT, "models"))
 
 
 @dataclass
@@ -42,6 +39,10 @@ def _latest_metadata_path() -> str:
 
 
 def load_latest_model() -> LoadedModel:
+    # Import inside the guarded prediction path so missing native libraries
+    # degrade scoring rather than preventing the service from starting.
+    import joblib
+
     global _loaded
 
     meta_path = _latest_metadata_path()
@@ -126,32 +127,29 @@ def _safe_str(x: Any, default: str) -> str:
 # -----------------------------
 def adapt_features_to_schema(features: Dict[str, Any], schema: List[str]) -> Dict[str, Any]:
     """
-    Your Automation API sends:
-      claim_amount, claim_type, police_report, channel
-
-    The Kaggle model expects the 32-column carclaims schema.
-    We fill missing columns with safe defaults (VALID strings/numbers),
-    and map your 4 fields into meaningful related columns.
+    Map the intake's age, previous_claims, police_report_filed, channel,
+    and days_since_policy_start to the vehicle-claims training schema.
+    Legacy police_report is also accepted. Unprovided attributes retain
+    explicit defaults; these approximations require validation before use.
     """
 
-    claim_amount = features.get("claim_amount", None)
     claim_type = _safe_str(features.get("claim_type", None), "OTHER").upper()
-    police_report = features.get("police_report", None)
+    police_report = features.get("police_report_filed", features.get("police_report"))
     channel = _safe_str(features.get("channel", None), "OTHER").upper()
 
     # VALID defaults (avoid None) so OHE doesn't crash
     base: Dict[str, Any] = {
-        "Month": _safe_int(features.get("Month", None), 6),
+        "Month": _safe_str(features.get("Month", None), "Jun"),
         "WeekOfMonth": _safe_int(features.get("WeekOfMonth", None), 2),
         "DayOfWeek": _safe_str(features.get("DayOfWeek", None), "Monday"),
         "Make": _safe_str(features.get("Make", None), "Other"),
         "AccidentArea": _safe_str(features.get("AccidentArea", None), "Urban"),
         "DayOfWeekClaimed": _safe_str(features.get("DayOfWeekClaimed", None), "Monday"),
-        "MonthClaimed": _safe_int(features.get("MonthClaimed", None), 6),
+        "MonthClaimed": _safe_str(features.get("MonthClaimed", None), "Jun"),
         "WeekOfMonthClaimed": _safe_int(features.get("WeekOfMonthClaimed", None), 2),
         "Sex": _safe_str(features.get("Sex", None), "Female"),
         "MaritalStatus": _safe_str(features.get("MaritalStatus", None), "Single"),
-        "Age": _safe_int(features.get("Age", None), 35),
+        "Age": _safe_int(features.get("age", features.get("Age")), 35),
         "Fault": _safe_str(features.get("Fault", None), "Policy Holder"),
         "PolicyType": _safe_str(features.get("PolicyType", None), "Sedan - All Perils"),
         "VehicleCategory": _safe_str(features.get("VehicleCategory", None), "Sedan"),
@@ -182,23 +180,31 @@ def adapt_features_to_schema(features: Dict[str, Any], schema: List[str]) -> Dic
         base["PoliceReportFiled"] = "No"
 
     # Map channel -> AgentType (DIRECT -> Internal, PARTNER -> External)
-    if channel == "DIRECT":
+    if channel in {"DIRECT", "ONLINE", "CALL CENTER"}:
         base["AgentType"] = "Internal"
-    else:
+    elif "channel" in features:
         base["AgentType"] = "External"
 
-    # Map claim_amount -> VehiclePrice + Deductible buckets (rough proxy)
-    amt = _safe_float(claim_amount, 0.0)
-    if amt >= 25000:
-        base["VehiclePrice"] = "more than 69000"
-        base["Deductible"] = 1000
-    elif amt >= 10000:
-        base["VehiclePrice"] = "30000 to 39000"
-        base["Deductible"] = 750
-    elif amt > 0:
-        base["VehiclePrice"] = "less than 20000"
-        base["Deductible"] = 500
+    # Form fields mapped to the training dataset's categorical values.
+    if "previous_claims" in features:
+        count = _safe_int(features["previous_claims"], 0)
+        base["PastNumberOfClaims"] = ("none" if count == 0 else "1" if count == 1
+                                      else "2 to 4" if count <= 4 else "more than 4")
+    if "days_since_policy_start" in features:
+        days = _safe_int(features["days_since_policy_start"], 0)
+        base["Days_Policy_Accident"] = ("none" if days == 0 else "1 to 7" if days <= 7
+                                          else "8 to 15" if days <= 15
+                                          else "15 to 30" if days <= 30 else "more than 30")
+    if "age" in features:
+        age = _safe_int(features["age"], 35)
+        base["AgeOfPolicyHolder"] = ("16 to 17" if age < 18 else "18 to 20" if age <= 20
+                                      else "21 to 25" if age <= 25 else "26 to 30" if age <= 30
+                                      else "31 to 35" if age <= 35 else "36 to 40" if age <= 40
+                                      else "41 to 50" if age <= 50 else "51 to 65" if age <= 65
+                                      else "over 65")
 
+    # Amount is not vehicle value or deductible: retain explicit values/defaults.
+    # Do not manufacture vehicle attributes from claim amount.
     # Map claim_type -> BasePolicy / PolicyType
     if "THEFT" in claim_type:
         base["BasePolicy"] = "Theft"
@@ -208,8 +214,6 @@ def adapt_features_to_schema(features: Dict[str, Any], schema: List[str]) -> Dic
     elif "COLLISION" in claim_type:
         base["BasePolicy"] = "Collision"
         base["PolicyType"] = "Sedan - Collision"
-    else:
-        base["BasePolicy"] = "All Perils"
 
     # Return exactly schema columns (no missing keys)
     row: Dict[str, Any] = {}
@@ -226,6 +230,9 @@ def predict_risk(features: Dict[str, Any]) -> Tuple[float, float, str]:
     """
     Returns (risk_signal, threshold, model_version)
     """
+    import pandas as pd
+    import xgboost as xgb
+
     m = get_model()
 
     row = adapt_features_to_schema(features, m.feature_schema)
